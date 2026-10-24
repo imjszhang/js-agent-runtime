@@ -2,12 +2,18 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+// npm is a .cmd launcher on Windows, which execFile cannot start; run npm's own entry point there.
+function npm(args, options) {
+  if (process.platform !== 'win32') return execFileSync('npm', args, options);
+  if (!process.env.npm_execpath) throw new Error('On Windows run this through `npm run test:package`');
+  return execFileSync(process.execPath, [process.env.npm_execpath, ...args], options);
+}
 const temp = mkdtempSync(join(tmpdir(), 'js-agent-runtime-package-'));
 try {
-  const result = execFileSync('npm', ['pack', '--json', '--pack-destination', temp], { encoding: 'utf8' });
+  const result = npm(['pack', '--json', '--pack-destination', temp], { encoding: 'utf8' });
   const [{ filename }] = JSON.parse(result);
   writeFileSync(join(temp, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
-  execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(temp, filename)], { cwd: temp, stdio: 'inherit' });
+  npm(['install', '--ignore-scripts', '--no-audit', '--no-fund', join(temp, filename)], { cwd: temp, stdio: 'inherit' });
   writeFileSync(join(temp, 'smoke.mjs'), `
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';

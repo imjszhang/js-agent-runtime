@@ -1,6 +1,8 @@
 # Contributing
 
-Use Node.js 20 or newer on macOS or Linux.
+Use Node.js 20 or newer on macOS, Linux or Windows. Windows skips the tests whose fake CLIs
+are shebang scripts or need bash; run the full suite on macOS or Linux before submitting
+changes to adapters.
 
 ```sh
 npm ci --ignore-scripts

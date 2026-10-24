@@ -5,6 +5,10 @@ during 0.x development, breaking changes increment the minor version.
 
 ## [Unreleased]
 
+- Support native Windows for `run()` and metadata `probe()`: children start hidden without a shell, and timeout, abort, output-limit and parent-exit handling end the process tree with `taskkill /T /F` while the root is still running. Windows has no graceful termination phase and does not contain descendants that outlive the root; see the README.
+- On Windows, reject `.cmd`/`.bat` executables at planning time (they need a shell; point targets at the native `.exe`). Path overlap checks are case-insensitive there, as before.
+- Add cross-platform process lifecycle tests, skip shebang fake-CLI and Cursor bash tests on Windows with explicit reasons, run `test:package` on Windows, and add Windows to CI. Verified one live Claude Code `claude-config` attempt on Windows.
+
 ## [0.2.0] - 2026-10-24
 
 - Align local agent execution with js-llmlab: add OpenCode V2 and Cursor Agent adapters, examples and request-schema definitions.

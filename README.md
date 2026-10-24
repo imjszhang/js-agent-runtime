@@ -1,6 +1,6 @@
 # js-agent-runtime
 
-Provider-aware execution of local agent CLIs. Node.js 20 or newer; macOS/Linux for process-group isolation. ESM JavaScript and TypeScript declarations are shipped. No production dependencies, model SDK, implicit `.env` loading, CLI installation, or automatic upgrades.
+Provider-aware execution of local agent CLIs. Node.js 20 or newer; macOS/Linux use process-group isolation, Windows uses process-tree termination with the limits described under [Windows](#windows). ESM JavaScript and TypeScript declarations are shipped. No production dependencies, model SDK, implicit `.env` loading, CLI installation, or automatic upgrades.
 
 The package owns execution, not benchmark scoring or deliverable workflows. Callers select and stage instructions, skills, sources and assets; collect artifacts; validate content; and manage review, versions and publication.
 
@@ -73,6 +73,16 @@ Events include `schemaVersion`, `runId`, `sequence`, `time`, `type` and `data`. 
 
 Timeout/abort terminates the POSIX process group, allows a short grace period, then force-kills remaining descendants. A child that intentionally escapes its process group cannot be contained by this mechanism. Parent-process exit handlers also kill active groups. No automatic retry, provider fallback, privilege escalation, native session resume or publication occurs.
 
+### Windows
+
+`run()` and metadata `probe()` also work on native Windows. Windows has no process groups for console children, so containment is weaker than on POSIX:
+
+- There is no graceful phase. Timeout, abort, output-limit and parent-exit handling end the whole process tree at once with `taskkill /T /F`, and only while the root process is still running, because Windows reuses process IDs quickly. The tree follows Windows' recorded parent-process relationships, not an OS-enforced group.
+- Descendants that outlive the root process are not terminated and cannot be contained. After a normal root exit the pipes are closed after the grace period; a background process started by an agent tool can keep running.
+- `harness.executable` (and an extension's planned executable) must be a native executable. Planning rejects `.cmd` and `.bat` launchers because Windows can only start them through `cmd.exe` and runtime never uses a shell. npm-installed CLIs are `.cmd` shims; point the target at the native `.exe` they launch.
+- Path overlap checks compare case-insensitively, as Windows paths do. `SIGTERM` is not delivered to Node on Windows; `exit` and `SIGINT` handlers still end active trees.
+- Claude Code's shell sandbox is not available on native Windows, so a `claude-code` target with `workspace-write` (sandbox required, `failIfUnavailable`) is expected to fail closed. Use `bypass` with `api-key` or `claude-config` for tasks that need the shell, which provides no filesystem containment. Default Claude subscription isolation stays macOS-only and Cursor Agent stays POSIX-only. Codex, DeepSeek Harness and OpenCode sandboxes have not been verified on Windows.
+
 ## Built-in compatibility
 
 | Adapter | API auth | Native auth |
@@ -125,6 +135,8 @@ npm test
 npm run typecheck
 npm pack
 ```
+
+On Windows, tests whose fake CLIs are shebang scripts are skipped with that reason (Windows cannot start them without a shell), as are Cursor tests that need POSIX bash. `tests/process.test.mjs` covers timeout, cancellation, output limits, descendant cleanup and an end-to-end extension run on every platform by using the current Node executable directly.
 
 An optional `npm run test:sandbox` invokes the installed Codex sandbox in temporary fake repositories (API and native-login plans, read-only and workspace-write). It never requests a model or reads credentials. It is intentionally separate from the portable fake test suite.
 
@@ -192,6 +204,8 @@ On 2026-10-24, all five built-in adapters passed one live `workspace-write` atte
 | Cursor Agent | `2026.07.23-e383d2b` | Native login; requested `auto` |
 
 Cursor used `useHttp1ForAgent: true`, `useCurrentUserHomeForLogin: true` and `nativeStallTimeoutMs: 300000`. This result covers these selected local configurations; other authentication modes and models were not part of that live run.
+
+On 2026-10-24, one live attempt also passed on native Windows (10.0.26100 x64, Node.js 24.22.1): Claude Code `2.1.309` (native `claude.exe`), `claude-config` with the configured model (reported `claude-opus-5-5`) and `bypass` permission. Probes passed, the agent used Glob/Read/Write, the output file and unchanged input were verified, and it exited with code zero. No other adapter was tried on Windows.
 
 ## License
 
