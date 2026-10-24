@@ -5,6 +5,8 @@ during 0.x development, breaking changes increment the minor version.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-24
+
 - Align local agent execution with js-llmlab: add OpenCode V2 and Cursor Agent adapters, examples and request-schema definitions.
 - Verify OpenCode completion using credential-free native session exports; preserve unknown Cursor usage, cost and model identity.
 - Add Cursor transport/login compatibility options, guarded stall-timeout support, and explicit full-access permission mapping.

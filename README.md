@@ -10,7 +10,7 @@ The package owns execution, not benchmark scoring or deliverable workflows. Call
 npm install js-agent-runtime
 ```
 
-The command above applies after the first npm publication. For a source checkout:
+For a source checkout:
 
 ```sh
 npm ci --ignore-scripts
