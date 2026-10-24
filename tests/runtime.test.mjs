@@ -7,11 +7,11 @@ import { plan, run, probe, registerAdapter, snapshotDirectory, hashObject, creat
 
 const secret = 'this-is-a-private-test-credential-1847';
 const fakeSource = `#!/usr/bin/env node
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 const args = process.argv.slice(2), mode = process.env.FAKE_SCENARIO ?? 'codex';
 const emit = x => process.stdout.write(JSON.stringify(x) + '\\n');
-if (args.includes('--version')) { console.log('fake-agent 1.0.0'); process.exit(0); }
+if (args.includes('--version')) { console.log('2.1.296'); process.exit(0); }
 if (args.includes('status')) {
   if (args.includes('login')) console.log('Logged in using ChatGPT');
   else emit({ loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty',configDirectory:process.env.CLAUDE_CONFIG_DIR ?? process.env.HOME+'/.claude' });
@@ -30,6 +30,12 @@ else if (mode === 'missing-terminal') { emit({type:'thread.started',thread_id:'f
 else if (mode === 'failure') { emit({type:'turn.failed',error:{message:'Expected failure'}}); }
 else if (mode === 'overflow') { console.log('x'.repeat(8192)); }
 else if (mode === 'claude') {
+  if(process.env.CLAUDE_CODE_SHELL) {
+    const wrapper=readFileSync(process.env.CLAUDE_CODE_SHELL,'utf8');
+    if(!wrapper.includes('/usr/bin/sandbox-exec')||!wrapper.includes('--noprofile --norc'))process.exit(41);
+    const settings=JSON.parse(readFileSync(args[args.indexOf('--settings')+1],'utf8'));
+    if(!settings.sandbox.filesystem.denyWrite.some(p=>process.env.CLAUDE_CODE_SHELL.startsWith(p+'/')))process.exit(42);
+  }
   emit({type:'assistant',session_id:'fake-claude',message:{model:'fake-model',content:[{type:'text',text:'Produced file'}]}});
   writeFileSync('artifact.txt', input);
   emit({type:'result',subtype:'success',result:'done',usage:{input_tokens:5,output_tokens:3,cache_read_input_tokens:2,cache_creation_input_tokens:1},total_cost_usd:0.01});
@@ -50,7 +56,7 @@ async function fixture(t, adapter='codex', auth='api-key') {
   const executable = path.join(dir,'fake-agent.mjs'); await writeFile(executable,fakeSource,{mode:0o700});
   const backend = auth === 'api-key'
     ? { auth, provider:'test',model:'fake-model',protocol:adapter==='codex'?'responses':'anthropic-messages',baseURL:'https://example.invalid/v1',apiKeyEnv:'TEST_CREDENTIAL' }
-    : { auth, model:'fake-model' };
+    : { auth, model:'fake-model', ...(auth==='claude-subscription'&&process.platform!=='darwin'?{claudeConfigDir:path.join(dir,'auth')}:{}) };
   const request = {runId:'test-run',workspace,prompt:'make an artifact',target:{name:'test',harness:{adapter,executable,permission:'workspace-write'},backend},timeoutMs:3000,stateDir:path.join(dir,'state')};
   return {dir,workspace,executable,request,options:{resolveCredential:()=>secret,runDir:path.join(dir,'logs')}};
 }
@@ -69,16 +75,29 @@ test('strict schema rejects unknown fields, incompatible auth/protocol, effort a
   assert.throws(()=>plan({...f.request,target:{...f.request.target,backend:{auth:'chatgpt',model:'x',baseURL:'https://example.invalid'}}}),/Unknown/);
   assert.throws(()=>plan({...f.request,target:{...f.request.target,backend:{...f.request.target.backend,baseURL:'https://key:password@example.invalid'}}}),/without credentials/);
   const claude=await fixture(t,'claude-code');
-  assert.throws(()=>plan({...claude.request,target:{...claude.request.target,backend:{...claude.request.target.backend,reasoningEffort:'high'}}}),/only supported by Codex/);
+  for(const reasoningEffort of ['low','high','max']) {
+    const p=plan({...claude.request,target:{...claude.request.target,backend:{...claude.request.target.backend,reasoningEffort}}});
+    assert.equal(p.process.args[p.process.args.indexOf('--effort')+1],reasoningEffort);
+    assert.ok(p.process.args.includes('--include-partial-messages'));
+  }
+  assert.throws(()=>plan({...claude.request,target:{...claude.request.target,backend:{...claude.request.target.backend,reasoningEffort:'ultra'}}}),/low.*high.*max/);
 });
 test('native auth preserves CLI credential ownership and isolates subscription state',async t=>{
   const codex=await fixture(t,'codex','chatgpt'), p=plan(codex.request);
   assert.equal(p.credential,undefined); assert.match(p.process.env.CODEX_HOME,/\.codex$/);
   assert.ok(p.process.args.some(a=>a.includes('filesystem=')));
   const claude=await fixture(t,'claude-code','claude-subscription'), c=plan(claude.request);
-  assert.equal(c.process.env.HOME,os.homedir()); assert.equal(c.process.env.CLAUDE_CONFIG_DIR,undefined); assert.ok(!c.process.args.includes('--bare'));
+  if(process.platform==='darwin') {
+    assert.equal(c.process.env.HOME,os.homedir()); assert.equal(c.process.env.CLAUDE_CONFIG_DIR,undefined);
+    assert.match(c.process.env.CLAUDE_CODE_SHELL,/claude-shell\/subscription-bash$/);
+    const policy=c.files.find(file=>file.path.endsWith('profile.sb')).content;
+    assert.ok(policy.includes(JSON.stringify(path.join(os.homedir(),'.zshrc'))));
+    assert.ok(policy.includes(JSON.stringify(path.join(os.homedir(),'.bashrc'))));
+  } else assert.throws(()=>plan({...claude.request,target:{...claude.request.target,backend:{auth:'claude-subscription',model:'fake-model'}}}),/explicit claudeConfigDir/);
+  assert.ok(!c.process.args.includes('--bare'));
   const custom=plan({...claude.request,target:{...claude.request.target,backend:{...claude.request.target.backend,claudeConfigDir:path.join(claude.dir,'auth')}}});
   assert.equal(custom.process.env.CLAUDE_CONFIG_DIR,path.join(claude.dir,'auth'));
+  assert.equal(custom.process.env.CLAUDE_CODE_SHELL,undefined);
   assert.throws(()=>plan({...codex.request,target:{...codex.request.target,backend:{auth:'chatgpt',model:'x',codexHome:codex.workspace}}}),/overlap/);
 });
 test('Codex native login routes Responses to ChatGPT OAuth while API targets retain their supplied endpoint',async t=>{
@@ -99,6 +118,12 @@ test('Codex native login routes Responses to ChatGPT OAuth while API targets ret
   assert.equal(c[`${prefix}.env_key`],undefined);
   assert.equal(c.openai_base_url,undefined);
   assert.equal(nativePlan.credential,undefined);
+  assert.equal(c.cli_auth_credentials_store,'auto');
+  for(const credentialsStore of ['file','keyring','auto']) {
+    const selected=plan({...native.request,target:{...native.request.target,backend:{...native.request.target.backend,credentialsStore}}});
+    assert.equal(configFrom(selected).cli_auth_credentials_store,credentialsStore);
+  }
+  assert.throws(()=>plan({...native.request,target:{...native.request.target,backend:{...native.request.target.backend,credentialsStore:'invalid'}}}),/credentialsStore/);
   assert.equal(c.default_permissions,'js_agent_runtime');
   assert.ok(nativePlan.process.args.some(value=>value.startsWith('permissions.js_agent_runtime.filesystem=')));
   const api=await fixture(t), apiPlan=plan(api.request), a=configFrom(apiPlan), apiPrefix=`model_providers.${a.model_provider}`;
@@ -123,7 +148,8 @@ test('Claude API and native login both execute with normalized Messages usage',a
   for(const auth of ['api-key','claude-subscription']) {
     const f=await fixture(t,'claude-code',auth);
     const r=await run(plan(f.request),{...f.options,env:{FAKE_SCENARIO:'claude'}});
-    assert.equal(r.status,'completed'); assert.equal(r.usage.inputTokens,8); assert.equal(r.usage.totalTokens,11); assert.equal(r.cost.total,0.01);
+    assert.equal(r.status,'completed',r.error); assert.equal(r.usage.inputTokens,8); assert.equal(r.usage.totalTokens,11);
+    if(auth==='claude-subscription') assert.equal(r.cost,null); else assert.equal(r.cost.total,0.01);
   }
 });
 test('Codex native login executes without requesting a credential',async t=>{

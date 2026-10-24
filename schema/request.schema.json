@@ -6,78 +6,202 @@
   "additionalProperties": false,
   "required": ["runId", "workspace", "prompt", "target", "timeoutMs"],
   "properties": {
-    "runId": { "$ref": "#/$defs/name" },
-    "workspace": { "$ref": "#/$defs/absolutePath" },
-    "prompt": { "type": "string", "minLength": 1, "pattern": "^[^\\u0000]+$" },
-    "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
-    "maxOutputBytes": { "type": "integer", "minimum": 1024, "maximum": 134217728 },
-    "terminationGraceMs": { "type": "integer", "minimum": 0, "maximum": 30000 },
-    "stateDir": { "$ref": "#/$defs/absolutePath" },
+    "runId": {"$ref": "#/$defs/name"},
+    "workspace": {"$ref": "#/$defs/absolutePath"},
+    "prompt": {"type": "string", "minLength": 1, "pattern": "^[^\\u0000]+$"},
+    "timeoutMs": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "maxOutputBytes": {"type": "integer", "minimum": 1024, "maximum": 134217728},
+    "terminationGraceMs": {"type": "integer", "minimum": 0, "maximum": 30000},
+    "stateDir": {"$ref": "#/$defs/absolutePath"},
     "target": {
-      "type": "object", "additionalProperties": false, "required": ["name", "harness", "backend"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "harness", "backend"],
       "properties": {
-        "name": { "$ref": "#/$defs/name" },
+        "name": {"$ref": "#/$defs/name"},
         "harness": {
-          "type": "object", "additionalProperties": false, "required": ["adapter", "executable", "permission"],
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["adapter", "executable", "permission"],
           "properties": {
-            "adapter": { "enum": ["codex", "claude-code", "deepseek-harness"] },
-            "executable": { "$ref": "#/$defs/line" },
-            "permission": { "enum": ["read-only", "workspace-write", "bypass"] },
-            "contextMode": { "enum": ["snapshot", "project"] }
+            "adapter": {"enum": ["codex", "claude-code", "deepseek-harness", "opencode", "cursor-agent"]},
+            "executable": {"$ref": "#/$defs/line"},
+            "permission": {"enum": ["read-only", "workspace-write", "bypass"]},
+            "contextMode": {"enum": ["snapshot", "project"]},
+            "useHttp1ForAgent": {"type": "boolean"},
+            "nativeStallTimeoutMs": {"type": "integer", "minimum": 30000, "maximum": 300000},
+            "useCurrentUserHomeForLogin": {"type": "boolean"}
           }
         },
-        "backend": { "oneOf": [{ "$ref": "#/$defs/codexApi" }, { "$ref": "#/$defs/claudeApi" }, { "$ref": "#/$defs/chatgpt" }, { "$ref": "#/$defs/claudeSubscription" }, { "$ref": "#/$defs/claudeConfig" }] }
+        "backend": {
+          "oneOf": [
+            {"$ref": "#/$defs/codexApi"},
+            {"$ref": "#/$defs/claudeApi"},
+            {"$ref": "#/$defs/chatgpt"},
+            {"$ref": "#/$defs/claudeSubscription"},
+            {"$ref": "#/$defs/claudeConfig"},
+            {"$ref": "#/$defs/opencodeApi"},
+            {"$ref": "#/$defs/cursorLogin"},
+            {"$ref": "#/$defs/cursorApi"}
+          ]
+        }
       },
       "allOf": [
-        { "if": { "properties": { "harness": { "required": ["contextMode"], "properties": { "contextMode": { "const": "project" } } } } }, "then": { "anyOf": [
-          { "properties": { "harness": { "properties": { "adapter": { "const": "claude-code" } } }, "backend": { "$ref": "#/$defs/claudeConfig" } } },
-          { "properties": { "harness": { "properties": { "adapter": { "const": "deepseek-harness" } } }, "backend": { "$ref": "#/$defs/claudeApi" } } }
-        ] } },
-        { "if": { "properties": { "harness": { "properties": { "adapter": { "const": "codex" } } } } }, "then": { "properties": { "harness": { "properties": { "permission": { "enum": ["read-only", "workspace-write"] } } }, "backend": { "oneOf": [{ "$ref": "#/$defs/codexApi" }, { "$ref": "#/$defs/chatgpt" }] } } } },
-        { "if": { "properties": { "harness": { "properties": { "adapter": { "const": "claude-code" } } } } }, "then": { "properties": { "backend": { "oneOf": [{ "$ref": "#/$defs/claudeApi" }, { "$ref": "#/$defs/claudeSubscription" }, { "$ref": "#/$defs/claudeConfig" }] } } } },
-        { "if": { "properties": { "harness": { "properties": { "adapter": { "const": "deepseek-harness" } } } } }, "then": { "properties": { "backend": { "$ref": "#/$defs/claudeApi" } } } },
-        { "if": { "properties": { "harness": { "properties": { "permission": { "const": "bypass" } } } } }, "then": { "anyOf": [
-          { "properties": { "harness": { "properties": { "adapter": { "const": "claude-code" } } }, "backend": { "$ref": "#/$defs/claudeConfig" } } },
-          { "properties": { "harness": { "properties": { "adapter": { "const": "deepseek-harness" } } }, "backend": { "$ref": "#/$defs/claudeApi" } } }
-        ] } }
+        {
+          "if": {"properties": {"harness": {"required": ["contextMode"], "properties": {"contextMode": {"const": "project"}}}}},
+          "then": {
+            "anyOf": [
+              {"properties": {"harness": {"properties": {"adapter": {"const": "claude-code"}}}, "backend": {"$ref": "#/$defs/claudeConfig"}}},
+              {"properties": {"harness": {"properties": {"adapter": {"const": "deepseek-harness"}}}, "backend": {"$ref": "#/$defs/deepseekApi"}}}
+            ]
+          }
+        },
+        {
+          "if": {"properties": {"harness": {"properties": {"permission": {"const": "bypass"}}}}},
+          "then": {
+            "anyOf": [
+              {
+                "properties": {
+                  "harness": {"properties": {"adapter": {"const": "claude-code"}}},
+                  "backend": {"oneOf": [{"$ref": "#/$defs/claudeConfig"}, {"$ref": "#/$defs/claudeApi"}]}
+                }
+              },
+              {"properties": {"harness": {"properties": {"adapter": {"const": "deepseek-harness"}}}, "backend": {"$ref": "#/$defs/deepseekApi"}}},
+              {
+                "properties": {
+                  "harness": {"properties": {"adapter": {"const": "cursor-agent"}}},
+                  "backend": {"oneOf": [{"$ref": "#/$defs/cursorLogin"}, {"$ref": "#/$defs/cursorApi"}]}
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {"properties": {"harness": {"properties": {"adapter": {"const": "codex"}}}}},
+          "then": {"properties": {"backend": {"oneOf": [{"$ref": "#/$defs/codexApi"}, {"$ref": "#/$defs/chatgpt"}]}}}
+        },
+        {
+          "if": {"properties": {"harness": {"properties": {"adapter": {"const": "claude-code"}}}}},
+          "then": {"properties": {"backend": {"oneOf": [{"$ref": "#/$defs/claudeApi"}, {"$ref": "#/$defs/claudeSubscription"}, {"$ref": "#/$defs/claudeConfig"}]}}}
+        },
+        {
+          "if": {"properties": {"harness": {"properties": {"adapter": {"const": "deepseek-harness"}}}}},
+          "then": {"properties": {"backend": {"$ref": "#/$defs/deepseekApi"}}}
+        },
+        {
+          "if": {"properties": {"harness": {"properties": {"adapter": {"const": "opencode"}}}}},
+          "then": {"properties": {"backend": {"$ref": "#/$defs/opencodeApi"}}}
+        },
+        {
+          "if": {"properties": {"harness": {"properties": {"adapter": {"const": "cursor-agent"}}}}},
+          "then": {"properties": {"backend": {"oneOf": [{"$ref": "#/$defs/cursorLogin"}, {"$ref": "#/$defs/cursorApi"}]}}}
+        },
+        {
+          "if": {
+            "properties": {"harness": {"anyOf": [{"required": ["useHttp1ForAgent"]}, {"required": ["nativeStallTimeoutMs"]}, {"required": ["useCurrentUserHomeForLogin"]}]}}
+          },
+          "then": {"properties": {"harness": {"properties": {"adapter": {"const": "cursor-agent"}}}}}
+        }
       ]
     }
   },
   "$defs": {
-    "name": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$", "not": { "pattern": "\\.\\." } },
-    "line": { "type": "string", "minLength": 1, "pattern": "^[^\\u0000-\\u001f\\u007f]+$" },
-    "explicitModel": { "allOf": [{ "$ref": "#/$defs/line" }, { "not": { "const": "configured" } }] },
-    "absolutePath": { "type": "string", "minLength": 1, "pattern": "^/[^\\u0000-\\u001f\\u007f]*$" },
-    "envName": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
-    "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^/?#@]+(?:/[^?#]*)?$" },
-    "effort": { "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] },
+    "name": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$", "not": {"pattern": "\\.\\."}},
+    "line": {"type": "string", "minLength": 1, "pattern": "^[^\\u0000-\\u001f\\u007f]+$"},
+    "explicitModel": {"allOf": [{"$ref": "#/$defs/line"}, {"not": {"const": "configured"}}]},
+    "absolutePath": {"type": "string", "minLength": 1, "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"},
+    "envName": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+    "endpoint": {"type": "string", "format": "uri", "pattern": "^https?://[^/?#@]+(?:/[^?#]*)?$"},
+    "effort": {"enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]},
     "codexApi": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "required": ["auth", "model", "provider", "protocol", "baseURL", "apiKeyEnv"],
       "properties": {
-        "auth": { "const": "api-key" }, "model": { "$ref": "#/$defs/explicitModel" }, "provider": { "$ref": "#/$defs/name" },
-        "protocol": { "const": "responses" }, "baseURL": { "$ref": "#/$defs/endpoint" }, "apiKeyEnv": { "$ref": "#/$defs/envName" }, "reasoningEffort": { "$ref": "#/$defs/effort" }
+        "auth": {"const": "api-key"},
+        "model": {"$ref": "#/$defs/explicitModel"},
+        "provider": {"$ref": "#/$defs/name"},
+        "protocol": {"const": "responses"},
+        "baseURL": {"$ref": "#/$defs/endpoint"},
+        "apiKeyEnv": {"$ref": "#/$defs/envName"},
+        "reasoningEffort": {"$ref": "#/$defs/effort"}
       }
     },
     "claudeApi": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "required": ["auth", "model", "provider", "protocol", "baseURL", "apiKeyEnv"],
       "properties": {
-        "auth": { "const": "api-key" }, "model": { "$ref": "#/$defs/explicitModel" }, "provider": { "$ref": "#/$defs/name" },
-        "protocol": { "const": "anthropic-messages" }, "baseURL": { "$ref": "#/$defs/endpoint" }, "apiKeyEnv": { "$ref": "#/$defs/envName" }
+        "auth": {"const": "api-key"},
+        "model": {"$ref": "#/$defs/explicitModel"},
+        "provider": {"$ref": "#/$defs/name"},
+        "protocol": {"const": "anthropic-messages"},
+        "baseURL": {"$ref": "#/$defs/endpoint"},
+        "apiKeyEnv": {"$ref": "#/$defs/envName"},
+        "reasoningEffort": {"enum": ["low", "high", "max"]}
       }
     },
     "chatgpt": {
-      "type": "object", "additionalProperties": false, "required": ["auth", "model"],
-      "properties": { "auth": { "const": "chatgpt" }, "model": { "$ref": "#/$defs/explicitModel" }, "reasoningEffort": { "$ref": "#/$defs/effort" }, "codexHome": { "$ref": "#/$defs/absolutePath" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth", "model"],
+      "properties": {
+        "auth": {"const": "chatgpt"},
+        "model": {"$ref": "#/$defs/explicitModel"},
+        "reasoningEffort": {"$ref": "#/$defs/effort"},
+        "codexHome": {"$ref": "#/$defs/absolutePath"},
+        "credentialsStore": {"enum": ["auto", "file", "keyring"]}
+      }
     },
     "claudeSubscription": {
-      "type": "object", "additionalProperties": false, "required": ["auth", "model"],
-      "properties": { "auth": { "const": "claude-subscription" }, "model": { "$ref": "#/$defs/explicitModel" }, "claudeConfigDir": { "$ref": "#/$defs/absolutePath" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth", "model"],
+      "properties": {"auth": {"const": "claude-subscription"}, "model": {"$ref": "#/$defs/explicitModel"}, "claudeConfigDir": {"$ref": "#/$defs/absolutePath"}}
     },
     "claudeConfig": {
-      "type": "object", "additionalProperties": false, "required": ["auth", "model"],
-      "properties": { "auth": { "const": "claude-config" }, "model": { "$ref": "#/$defs/line" }, "claudeConfigDir": { "$ref": "#/$defs/absolutePath" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth", "model"],
+      "properties": {"auth": {"const": "claude-config"}, "model": {"$ref": "#/$defs/line"}, "claudeConfigDir": {"$ref": "#/$defs/absolutePath"}}
+    },
+    "deepseekApi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth", "model", "provider", "protocol", "baseURL", "apiKeyEnv"],
+      "properties": {
+        "auth": {"const": "api-key"},
+        "model": {"$ref": "#/$defs/explicitModel"},
+        "provider": {"$ref": "#/$defs/name"},
+        "protocol": {"const": "anthropic-messages"},
+        "baseURL": {"$ref": "#/$defs/endpoint"},
+        "apiKeyEnv": {"$ref": "#/$defs/envName"}
+      }
+    },
+    "opencodeApi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth", "model", "provider", "protocol", "baseURL", "apiKeyEnv"],
+      "properties": {
+        "auth": {"const": "api-key"},
+        "model": {"$ref": "#/$defs/explicitModel"},
+        "provider": {"$ref": "#/$defs/name"},
+        "protocol": {"const": "chat-completions"},
+        "baseURL": {"$ref": "#/$defs/endpoint"},
+        "apiKeyEnv": {"$ref": "#/$defs/envName"}
+      }
+    },
+    "cursorLogin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth", "model"],
+      "properties": {"auth": {"const": "cursor-login"}, "model": {"$ref": "#/$defs/explicitModel"}}
+    },
+    "cursorApi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth", "model"],
+      "properties": {"auth": {"const": "cursor-api-key"}, "model": {"$ref": "#/$defs/explicitModel"}, "apiKeyEnv": {"$ref": "#/$defs/envName"}}
     }
   }
 }

@@ -1,0 +1,22 @@
+{
+  "runId": "example-opencode-api",
+  "workspace": "/absolute/path/to/staged-workspace",
+  "prompt": "Read the supplied instructions and create the requested draft inside this workspace.",
+  "target": {
+    "name": "opencode-api",
+    "harness": {
+      "adapter": "opencode",
+      "executable": "opencode",
+      "permission": "workspace-write"
+    },
+    "backend": {
+      "auth": "api-key",
+      "provider": "custom",
+      "model": "your-model-id",
+      "protocol": "chat-completions",
+      "baseURL": "https://gateway.example/v1",
+      "apiKeyEnv": "CUSTOM_API_KEY"
+    }
+  },
+  "timeoutMs": 600000
+}

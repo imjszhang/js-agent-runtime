@@ -23,7 +23,8 @@ function register(pid: number, stop: () => void): () => void {
   active.set(pid, stop);
   return () => { active.delete(pid); if (!active.size) { process.removeListener("exit", terminateGroups); process.removeListener("SIGTERM", onTerm); process.removeListener("SIGINT", onInt); } };
 }
-const allowedInherited = ["PATH", "PATHEXT", "SystemRoot", "SYSTEMROOT", "COMSPEC", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM"];
+const allowedInherited = ["PATH", "PATHEXT", "SystemRoot", "SYSTEMROOT", "COMSPEC", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
+  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"];
 export function baseEnvironment(): Record<string, string> {
   return Object.fromEntries(allowedInherited.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));
 }

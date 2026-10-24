@@ -2,7 +2,10 @@ import path from "node:path";
 import { homedir } from "node:os";
 import { createParser } from "./parsers.js";
 import { nativeCodexProviderConfig } from "./codex-native.js";
+import { planClaudeSubscriptionShell } from "./claude-shell.js";
 import { deepseekAdapter } from "./deepseek.js";
+import { opencodeAdapter } from "./opencode.js";
+import { cursorAdapter } from "./cursor.js";
 import { overlaps, validateBackend } from "./validation.js";
 import type { Adapter, AdapterPlan, RunRequest } from "./types.js";
 
@@ -16,9 +19,9 @@ function codexPlan(request: RunRequest, stateDir: string): AdapterPlan {
   if (subscription && (overlaps(authDir, request.workspace) || overlaps(authDir, stateDir))) throw new Error("Codex authentication directory must not overlap workspace or temporary state");
   const env = { ...environment(stateDir), CODEX_HOME: authDir, GIT_CEILING_DIRECTORIES: request.workspace };
   const config: Record<string, unknown> = {
-    approval_policy: "never", cli_auth_credentials_store: subscription ? "auto" : "file",
+    approval_policy: "never", cli_auth_credentials_store: b.auth === "chatgpt" ? b.credentialsStore ?? "auto" : "file",
     "shell_environment_policy.inherit": "core", "shell_environment_policy.ignore_default_excludes": false,
-    "shell_environment_policy.exclude": ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*", "CODEX_HOME"],
+    "shell_environment_policy.exclude": ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*", "CODEX_HOME", ...(subscription ? ["*PROXY*", "*proxy*"] : [])],
     project_doc_max_bytes: 0, project_root_markers: [], check_for_update_on_startup: false, "features.plugins": false, "features.hooks": false,
     "features.apps": false, "features.memories": false, "features.skip_host_skill_discovery": true,
     "features.skill_search": false, "features.skill_mcp_dependency_install": false,
@@ -55,14 +58,17 @@ function claudePlan(request: RunRequest, stateDir: string): AdapterPlan {
   const env: Record<string, string> = {
     ...environment(stateDir), GIT_CEILING_DIRECTORIES: request.workspace, DISABLE_AUTOUPDATER: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
     // Claude 2.1.296 forces permissionMode=default when scrub=1, even with
-    // explicit allowedTools. The opt-in native-config bypass must remain bypass.
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: configured && bypass ? "0" : "1",
+    // explicit allowedTools. An explicitly selected bypass must remain bypass.
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: bypass ? "0" : "1",
     CLAUDE_CODE_TMPDIR: path.join(stateDir, "tmp"), CLAUDE_CODE_DEBUG_LOGS_DIR: path.join(stateDir, "claude-debug.log"),
     ...(configured ? {} : { ANTHROPIC_BASE_URL: b.auth === "api-key" ? b.baseURL.replace(/\/+$/u, "").replace(/\/v1$/u, "") : "https://api.anthropic.com" }),
   };
   // Explicitly setting the default directory changes native macOS Keychain identity.
   if (configured || (b.auth === "claude-subscription" && b.claudeConfigDir === undefined)) { env.HOME = homedir(); env.USERPROFILE = homedir(); }
   if (b.auth === "api-key" || b.claudeConfigDir !== undefined) env.CLAUDE_CONFIG_DIR = authDir;
+  const shell = b.auth === "claude-subscription" && b.claudeConfigDir === undefined
+    ? planClaudeSubscriptionShell(authDir, stateDir) : { env: {}, files: [] };
+  Object.assign(env, shell.env);
   const tools = (request.target.harness.permission !== "read-only" ? "Read,Glob,Grep,Edit,Write,Bash" : "Read,Glob,Grep") + (projectContext ? ",Skill" : "");
   const settingsPath = path.join(stateDir, "settings.json");
   const protectedPaths = native ? [authDir, path.join(path.dirname(authDir), ".claude.json"), path.join(homedir(), "Library/Keychains")] : [];
@@ -72,24 +78,28 @@ function claudePlan(request: RunRequest, stateDir: string): AdapterPlan {
     ...(bypass ? { sandbox: { enabled: false } } : request.target.harness.permission === "workspace-write" ? { sandbox: {
       enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true,
       allowUnsandboxedCommands: false, excludedCommands: [],
-      filesystem: { denyRead: protectedPaths, denyWrite: [...protectedPaths, settingsPath] },
-      credentials: { envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"].map(name => ({ name, mode: "deny" })) },
+      filesystem: { denyRead: protectedPaths, denyWrite: [...protectedPaths, settingsPath, ...(shell.files.length ? [path.join(stateDir, "claude-shell")] : [])] },
+      credentials: { envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR",
+        ...(b.auth === "claude-subscription" ? ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "all_proxy", "no_proxy"] : [])].map(name => ({ name, mode: "deny" })) },
     } } : {}),
   };
   return {
-    files: [{ path: settingsPath, content: JSON.stringify(settings, null, 2) + "\n", mode: 0o600 }],
+    files: [{ path: settingsPath, content: JSON.stringify(settings, null, 2) + "\n", mode: 0o600 }, ...shell.files],
     process: { executable: request.target.harness.executable,
-      args: ["-p", "--output-format", "stream-json", "--verbose", ...(native ? [] : ["--bare"]),
+      args: ["-p", "--output-format", "stream-json", ...(b.auth === "api-key" ? ["--include-partial-messages"] : []), "--verbose", ...(native ? [] : ["--bare"]),
         ...(configured || bypass ? [] : ["--safe-mode", "--restricted"]), ...(projectContext ? [] : ["--disable-slash-commands"]), "--no-chrome", "--no-session-persistence",
         "--permission-mode", bypass ? "bypassPermissions" : "dontAsk", "--permission-prompts", "none", "--tools", tools, "--allowedTools", tools,
         "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--settings", settingsPath, "--setting-sources", projectContext ? "user,project,local" : configured ? "user" : "",
-        ...(configured && b.model === "configured" ? [] : ["--model", b.model])],
+        ...(configured && b.model === "configured" ? [] : ["--model", b.model]),
+        ...(b.auth === "api-key" && b.reasoningEffort !== undefined ? ["--effort", b.reasoningEffort] : [])],
       cwd: request.workspace, stdin: request.prompt, env },
     ...(b.auth === "api-key" ? { credential: { ref: b.apiKeyEnv, envVar: "ANTHROPIC_API_KEY" } } : {}),
   };
 }
 export const builtInAdapters: Adapter[] = [
   deepseekAdapter,
-  { id: "codex", version: "2", validate: target => { validateBackend(target); }, plan: (request, c) => codexPlan(request, c.stateDir), createParser: () => createParser("codex"), probeArgs: ["--version"] },
-  { id: "claude-code", version: "2", validate: target => { validateBackend(target); }, plan: (request, c) => claudePlan(request, c.stateDir), createParser: () => createParser("claude-code"), probeArgs: ["--version"] },
+  opencodeAdapter,
+  cursorAdapter,
+  { id: "codex", version: "3", validate: target => { validateBackend(target); }, plan: (request, c) => codexPlan(request, c.stateDir), createParser: () => createParser("codex"), probeArgs: ["--version"] },
+  { id: "claude-code", version: "3", validate: target => { validateBackend(target); }, plan: (request, c) => claudePlan(request, c.stateDir), createParser: () => createParser("claude-code"), probeArgs: ["--version"] },
 ];

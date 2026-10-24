@@ -1,4 +1,5 @@
 import type { EventType, OutputParser, ParsedOutput, Usage } from "./types.js";
+import { createClaudeAccounting } from "./claude-accounting.js";
 
 const object = (x: unknown): Record<string, unknown> | undefined => x !== null && typeof x === "object" && !Array.isArray(x) ? x as Record<string, unknown> : undefined;
 const string = (x: unknown): string | null => typeof x === "string" ? x : null;
@@ -13,6 +14,8 @@ function usage(x: unknown, claude: boolean): Usage | null {
 }
 export function createParser(kind: "codex" | "claude-code"): OutputParser {
   const result: ParsedOutput = { completed: false, failed: false, text: "", usage: null, cost: null, sessionId: null, responseModel: null, error: null };
+  const accounting = createClaudeAccounting();
+  let streamedText = "", claudeTerminal = false;
   return {
     push(value) {
       const events: Array<{ type: EventType; data: unknown }> = [];
@@ -34,7 +37,43 @@ export function createParser(kind: "codex" | "claude-code"): OutputParser {
           result.failed = true; result.error ??= string(object(e.error)?.message) ?? string(e.message) ?? string(e.error) ?? "Codex reported a failure";
         }
       } else {
+        // Nested agent output is observable but cannot finish or replace the
+        // root response. Its usage is already covered by the root run total.
+        const child = e.parent_tool_use_id !== undefined && e.parent_tool_use_id !== null && e.parent_tool_use_id !== "";
+        if (child) {
+          if (e.type === "assistant") {
+            const content = object(e.message)?.content;
+            if (Array.isArray(content)) for (const block of content) if (object(block)?.type === "tool_use") events.push({ type: "tool", data: block });
+          }
+          if (e.type === "stream_event") {
+            const stream = object(e.event), block = object(stream?.content_block);
+            if (stream?.type === "content_block_start" && block?.type === "tool_use") events.push({ type: "tool", data: { phase: "started", ...block } });
+          }
+          return events;
+        }
+        if (claudeTerminal && ["assistant", "stream_event", "result"].includes(e.type)) {
+          result.completed = false; result.failed = true;
+          result.error ??= "Claude Code emitted output after its terminal result";
+          return events;
+        }
+        accounting.observe(e);
         result.sessionId = string(e.session_id) ?? result.sessionId;
+        if (e.type === "stream_event") {
+          const stream = object(e.event);
+          if (stream?.type === "message_start") {
+            streamedText = "";
+            result.responseModel = string(object(stream.message)?.model) ?? result.responseModel;
+          }
+          if (stream?.type === "content_block_delta") {
+            const delta = object(stream.delta);
+            if (delta?.type === "text_delta" && typeof delta.text === "string") {
+              streamedText += delta.text; result.text = streamedText;
+              events.push({ type: "message", data: { text: streamedText, delta: delta.text } });
+            }
+          }
+          if (stream?.type === "content_block_start" && object(stream.content_block)?.type === "tool_use")
+            events.push({ type: "tool", data: { phase: "started", ...object(stream.content_block) } });
+        }
         if (e.type === "assistant") {
           const message = object(e.message); result.responseModel = string(message?.model) ?? result.responseModel;
           if (Array.isArray(message?.content)) {
@@ -48,19 +87,26 @@ export function createParser(kind: "codex" | "claude-code"): OutputParser {
           }
         }
         if (e.type === "result") {
+          claudeTerminal = true;
           if (e.subtype === "success" && e.is_error !== true) result.completed = true;
-          else { result.failed = true; result.error ??= string(e.result) ?? `Claude Code result: ${String(e.subtype)}`; }
+          else {
+            const errors = Array.isArray(e.errors) ? e.errors.filter((value): value is string => typeof value === "string").join("; ") : "";
+            result.failed = true; result.error ??= string(e.result) ?? (errors || `Claude Code result: ${String(e.subtype)}`);
+          }
           result.text = string(e.result) ?? result.text;
-          result.usage = usage(e.usage, true);
+          result.usage = accounting.usage();
           const total = count(e.total_cost_usd); if (total !== null) result.cost = { total, currency: "USD" };
           const models = object(e.modelUsage); if (models) result.responseModel = Object.keys(models).length === 1 ? Object.keys(models)[0] ?? null : null;
         }
-        if (e.type === "error") { result.failed = true; result.error ??= string(e.message) ?? "Claude Code reported a failure"; }
+        if (e.type === "error") { result.completed = false; result.failed = true; result.error ??= string(e.message) ?? "Claude Code reported a failure"; }
       }
       result.responseModel = string(e.model) ?? result.responseModel;
       if (e.type === "turn.completed" || e.type === "result") if (result.usage) events.push({ type: "usage", data: result.usage });
       return events;
     },
-    finish: () => structuredClone(result),
+    finish: () => {
+      if (kind === "claude-code") result.usage = accounting.usage();
+      return structuredClone(result);
+    },
   };
 }

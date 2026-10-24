@@ -37,42 +37,58 @@ export function overlaps(a: string, b: string): boolean {
 }
 export function validateTarget(value: unknown): Target {
   const raw = record(value, "target"); keys(raw, ["name", "harness", "backend"], "target");
-  const h = record(raw.harness, "harness"); keys(h, ["adapter", "executable", "permission", "contextMode"], "harness");
+  const h = record(raw.harness, "harness"); keys(h, ["adapter", "executable", "permission", "contextMode", "useHttp1ForAgent", "nativeStallTimeoutMs", "useCurrentUserHomeForLogin"], "harness");
   if (h.permission !== "read-only" && h.permission !== "workspace-write" && h.permission !== "bypass") throw new Error("harness.permission must be read-only, workspace-write or bypass");
-  if (h.permission === "bypass" && h.adapter !== "claude-code" && h.adapter !== "deepseek-harness") throw new Error("bypass permission is only supported by Claude Code or DeepSeek Harness");
+  if (h.permission === "bypass" && h.adapter !== "claude-code" && h.adapter !== "deepseek-harness" && h.adapter !== "cursor-agent") throw new Error("bypass permission is only supported by Claude Code, DeepSeek Harness or Cursor Agent");
   if (h.contextMode !== undefined && (typeof h.contextMode !== "string" || !["snapshot", "project"].includes(h.contextMode))) throw new Error("Invalid harness.contextMode");
   if (h.contextMode === "project" && h.adapter !== "claude-code" && h.adapter !== "deepseek-harness") throw new Error("project context requires Claude Code or DeepSeek Harness");
-  return { name: name(raw.name, "target.name"), harness: { adapter: name(h.adapter, "harness.adapter"), executable: text(h.executable, "harness.executable"), permission: h.permission, ...(h.contextMode !== undefined ? { contextMode: h.contextMode as "snapshot" | "project" } : {}) }, backend: structuredClone(record(raw.backend, "backend")) as Target["backend"] };
+  for (const key of ["useHttp1ForAgent", "nativeStallTimeoutMs", "useCurrentUserHomeForLogin"] as const) {
+    if (h[key] === undefined) continue;
+    if (h.adapter !== "cursor-agent") throw new Error(`harness.${key} requires Cursor Agent`);
+    if (key === "nativeStallTimeoutMs") integer(h[key], `harness.${key}`, 30_000, 300_000);
+    else if (typeof h[key] !== "boolean") throw new Error(`harness.${key} must be boolean`);
+  }
+  return { name: name(raw.name, "target.name"), harness: { ...h, adapter: name(h.adapter, "harness.adapter"), executable: text(h.executable, "harness.executable"), permission: h.permission } as Target["harness"], backend: structuredClone(record(raw.backend, "backend")) as Target["backend"] };
 }
 export function validateBackend(target: Target): Backend {
   const raw = record(target.backend, "backend");
   const deepseek = target.harness.adapter === "deepseek-harness";
   if (deepseek && raw.auth !== "api-key") throw new Error("DeepSeek Harness requires api-key authentication");
+  if (target.harness.adapter === "opencode" && raw.auth !== "api-key") throw new Error("OpenCode requires api-key authentication");
+  if (target.harness.adapter === "cursor-agent" && raw.auth !== "cursor-login" && raw.auth !== "cursor-api-key") throw new Error("Cursor Agent requires native cursor-login or cursor-api-key authentication");
   if (target.harness.contextMode === "project" && !deepseek && raw.auth !== "claude-config") throw new Error("project context requires claude-config authentication");
   const model = text(raw.model, "backend.model");
   if (model === "configured" && raw.auth !== "claude-config") throw new Error("model configured is reserved for claude-config authentication");
-  if (target.harness.permission === "bypass" && !deepseek && raw.auth !== "claude-config") throw new Error("bypass permission requires claude-config authentication");
-  const effort = (): void => { if (raw.reasoningEffort !== undefined && !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(String(raw.reasoningEffort))) throw new Error("Unsupported reasoningEffort"); };
+  if (target.harness.permission === "bypass" && target.harness.adapter === "claude-code" && raw.auth !== "claude-config" && raw.auth !== "api-key") throw new Error("Claude bypass permission requires claude-config or api-key authentication");
+  const effort = (): void => { if (raw.reasoningEffort !== undefined && (typeof raw.reasoningEffort !== "string" || !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(raw.reasoningEffort))) throw new Error("Unsupported reasoningEffort"); };
   if (raw.auth === "api-key") {
     keys(raw, ["auth", "model", "provider", "protocol", "baseURL", "apiKeyEnv", "reasoningEffort"], "API backend");
     name(raw.provider, "backend.provider"); envName(raw.apiKeyEnv, "backend.apiKeyEnv");
     const endpoint = text(raw.baseURL, "backend.baseURL");
     const url = new URL(endpoint);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || endpoint.trim() !== endpoint) throw new Error("backend.baseURL must be an HTTP(S) endpoint without credentials, query or fragment");
-    const protocol = target.harness.adapter === "codex" ? "responses" : "anthropic-messages";
+    const protocol = target.harness.adapter === "codex" ? "responses" : target.harness.adapter === "opencode" ? "chat-completions" : "anthropic-messages";
     if (raw.protocol !== protocol) throw new Error(`${target.harness.adapter} requires ${protocol}`);
-    if (raw.reasoningEffort !== undefined && target.harness.adapter !== "codex") throw new Error("reasoningEffort is only supported by Codex");
+    if (raw.reasoningEffort !== undefined && target.harness.adapter !== "codex") {
+      if (target.harness.adapter !== "claude-code") throw new Error("reasoningEffort is only supported by Codex or Claude Code API backends");
+      if (!["low", "high", "max"].includes(String(raw.reasoningEffort))) throw new Error("Claude Code API reasoningEffort must be low, high or max");
+    }
     effort();
   } else if (raw.auth === "chatgpt") {
-    keys(raw, ["auth", "model", "reasoningEffort", "codexHome"], "ChatGPT backend");
+    keys(raw, ["auth", "model", "reasoningEffort", "codexHome", "credentialsStore"], "ChatGPT backend");
     if (target.harness.adapter !== "codex") throw new Error("chatgpt auth requires Codex");
     if (raw.codexHome !== undefined) absolute(raw.codexHome, "backend.codexHome");
+    if (raw.credentialsStore !== undefined && (typeof raw.credentialsStore !== "string" || !["auto", "file", "keyring"].includes(raw.credentialsStore))) throw new Error("credentialsStore must be auto, file or keyring");
     effort();
   } else if (raw.auth === "claude-subscription" || raw.auth === "claude-config") {
     keys(raw, ["auth", "model", "claudeConfigDir"], "Claude native backend");
     if (target.harness.adapter !== "claude-code") throw new Error(`${raw.auth} auth requires Claude Code`);
     if (raw.claudeConfigDir !== undefined) absolute(raw.claudeConfigDir, "backend.claudeConfigDir");
-  } else throw new Error("Built-in backend.auth must be api-key, chatgpt, claude-subscription or claude-config");
+  } else if (raw.auth === "cursor-login" || raw.auth === "cursor-api-key") {
+    keys(raw, raw.auth === "cursor-login" ? ["auth", "model"] : ["auth", "model", "apiKeyEnv"], "Cursor backend");
+    if (target.harness.adapter !== "cursor-agent") throw new Error("Cursor authentication requires Cursor Agent");
+    if (raw.apiKeyEnv !== undefined) envName(raw.apiKeyEnv, "backend.apiKeyEnv");
+  } else throw new Error("Unsupported built-in backend.auth");
   return { ...raw, model } as Backend;
 }
 export function validateRequest(value: unknown): RunRequest {

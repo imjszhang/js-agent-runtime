@@ -1,0 +1,20 @@
+{
+  "runId": "example-cursor-login",
+  "workspace": "/absolute/path/to/staged-workspace",
+  "prompt": "Read the supplied instructions and create the requested draft inside this workspace.",
+  "target": {
+    "name": "cursor-login",
+    "harness": {
+      "adapter": "cursor-agent",
+      "executable": "cursor-agent",
+      "permission": "workspace-write",
+      "useHttp1ForAgent": true,
+      "useCurrentUserHomeForLogin": true
+    },
+    "backend": {
+      "auth": "cursor-login",
+      "model": "auto"
+    }
+  },
+  "timeoutMs": 600000
+}

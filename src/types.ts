@@ -5,14 +5,20 @@ export type ApiBackend = {
   auth: "api-key"; model: string; provider: string; protocol: Protocol;
   baseURL: string; apiKeyEnv: string; reasoningEffort?: ReasoningEffort;
 };
-export type CodexLoginBackend = { auth: "chatgpt"; model: string; reasoningEffort?: ReasoningEffort; codexHome?: string };
+export type CodexLoginBackend = { auth: "chatgpt"; model: string; reasoningEffort?: ReasoningEffort; codexHome?: string; credentialsStore?: "auto" | "file" | "keyring" };
 export type ClaudeLoginBackend = { auth: "claude-subscription"; model: string; claudeConfigDir?: string };
 /** configured deliberately leaves model selection to the CLI's user settings. */
 export type ClaudeConfigBackend = { auth: "claude-config"; model: string; claudeConfigDir?: string };
 /** Extensions validate their own backend without expanding the built-in auth union. */
 export type ExtensionBackend = { auth: string; model: string; [key: string]: unknown };
-export type Backend = ApiBackend | CodexLoginBackend | ClaudeLoginBackend | ClaudeConfigBackend;
-export type Harness = { adapter: string; executable: string; permission: Permission; contextMode?: "snapshot" | "project" };
+export type CursorLoginBackend = { auth: "cursor-login"; model: string };
+export type CursorApiBackend = { auth: "cursor-api-key"; model: string; apiKeyEnv?: string };
+export type Backend = ApiBackend | CodexLoginBackend | ClaudeLoginBackend | ClaudeConfigBackend | CursorLoginBackend | CursorApiBackend;
+export type Harness = {
+  adapter: string; executable: string; permission: Permission; contextMode?: "snapshot" | "project";
+  /** Cursor-only native transport and login compatibility options. */
+  useHttp1ForAgent?: boolean; nativeStallTimeoutMs?: number; useCurrentUserHomeForLogin?: boolean;
+};
 export type Target = { name: string; harness: Harness; backend: Backend | ExtensionBackend };
 export type RunRequest = {
   runId: string; workspace: string; prompt: string; target: Target; timeoutMs: number;
@@ -48,7 +54,7 @@ export type Adapter = {
   id: string; version: string;
   validate(target: Target): void;
   plan(request: RunRequest, context: { stateDir: string }): AdapterPlan;
-  createParser(): OutputParser;
+  createParser(request?: RunRequest): OutputParser;
   probeArgs?: string[];
 };
 export type RunStatus = "completed" | "failed" | "cancelled" | "timed_out";

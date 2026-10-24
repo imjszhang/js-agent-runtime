@@ -82,7 +82,7 @@ test('configured supports default namespace and explicit model, but the sentinel
 test('existing Claude API and subscription profiles retain isolation and explicit models',async t=>{
   const f=await fixture(t);
   for(const auth of ['api-key','claude-subscription']){
-    const backend=auth==='api-key'?{auth,model:'explicit',provider:'fixture',protocol:'anthropic-messages',baseURL:'https://api.invalid/v1',apiKeyEnv:'FIXTURE_KEY'}:{auth,model:'explicit'};
+    const backend=auth==='api-key'?{auth,model:'explicit',provider:'fixture',protocol:'anthropic-messages',baseURL:'https://api.invalid/v1',apiKeyEnv:'FIXTURE_KEY'}:{auth,model:'explicit',claudeConfigDir:f.configDir};
     const p=plan({...f.request,target:{...f.request.target,harness:{...f.request.target.harness,permission:'workspace-write'},backend}});
     assert.ok(p.process.args.includes('--restricted'));assert.ok(p.process.args.includes('--safe-mode'));
     assert.equal(arg(p,'--setting-sources'),'');assert.equal(arg(p,'--model'),'explicit');assert.equal(arg(p,'--permission-mode'),'dontAsk');
@@ -93,12 +93,20 @@ test('existing Claude API and subscription profiles retain isolation and explici
   }
 });
 
-test('bypass rejects API and subscription auth before creating any runtime state',async t=>{
+test('bypass permits explicit API access but rejects subscription auth before creating runtime state',async t=>{
   const f=await fixture(t);
   for(const backend of [
     {auth:'claude-subscription',model:'explicit'},
-    {auth:'api-key',model:'explicit',provider:'fixture',protocol:'anthropic-messages',baseURL:'https://api.invalid/v1',apiKeyEnv:'FIXTURE_KEY'},
-  ])assert.throws(()=>plan({...f.request,target:{...f.request.target,backend}}),/bypass permission requires claude-config authentication/);
+  ])assert.throws(()=>plan({...f.request,target:{...f.request.target,backend}}),/bypass/);
+  const api=plan({...f.request,target:{...f.request.target,backend:{auth:'api-key',model:'explicit',provider:'fixture',protocol:'anthropic-messages',baseURL:'https://api.invalid/v1',apiKeyEnv:'FIXTURE_KEY'}}});
+  assert.equal(arg(api,'--permission-mode'),'bypassPermissions');
+  assert.equal(api.process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,'0');
+  assert.equal(api.process.env.HOME,f.request.stateDir);
+  assert.equal(api.process.env.ANTHROPIC_BASE_URL,'https://api.invalid');
+  assert.equal(api.credential.envVar,'ANTHROPIC_API_KEY');
+  assert.equal(JSON.parse(api.files[0].content).sandbox.enabled,false);
+  for(const flag of ['--safe-mode','--restricted'])assert.ok(!api.process.args.includes(flag));
+  for(const flag of ['--bare','--strict-mcp-config','--no-session-persistence'])assert.ok(api.process.args.includes(flag));
   assert.equal(arg(plan(f.request),'--permission-mode'),'bypassPermissions');
   await assert.rejects(fsp.access(f.request.stateDir));
 });

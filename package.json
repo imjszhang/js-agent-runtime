@@ -27,6 +27,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
+    "test:live": "npm run build && node scripts/live-smoke.mjs",
     "test:sandbox": "npm run build && node tests/native-sandbox.mjs",
     "test:deepseek-native": "npm run build && node tests/native-deepseek.mjs",
     "prepack": "npm run build",

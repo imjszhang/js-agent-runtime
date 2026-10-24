@@ -5,7 +5,7 @@
   "target": {
     "name": "native-codex",
     "harness": { "adapter": "codex", "executable": "codex", "permission": "workspace-write" },
-    "backend": { "auth": "chatgpt", "model": "your-model-id" }
+    "backend": { "auth": "chatgpt", "model": "your-model-id", "credentialsStore": "auto" }
   },
   "timeoutMs": 600000
 }

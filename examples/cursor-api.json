@@ -1,0 +1,20 @@
+{
+  "runId": "example-cursor-api",
+  "workspace": "/absolute/path/to/staged-workspace",
+  "prompt": "Read the supplied instructions and create the requested draft inside this workspace.",
+  "target": {
+    "name": "cursor-api",
+    "harness": {
+      "adapter": "cursor-agent",
+      "executable": "cursor-agent",
+      "permission": "workspace-write",
+      "useHttp1ForAgent": true
+    },
+    "backend": {
+      "auth": "cursor-api-key",
+      "model": "auto",
+      "apiKeyEnv": "CURSOR_API_KEY"
+    }
+  },
+  "timeoutMs": 600000
+}

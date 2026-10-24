@@ -5,7 +5,7 @@
   "target": {
     "name": "custom-claude",
     "harness": { "adapter": "claude-code", "executable": "claude", "permission": "workspace-write" },
-    "backend": { "auth": "api-key", "provider": "custom", "model": "your-model-id", "protocol": "anthropic-messages", "baseURL": "https://gateway.example", "apiKeyEnv": "CUSTOM_API_KEY" }
+    "backend": { "auth": "api-key", "provider": "custom", "model": "your-model-id", "protocol": "anthropic-messages", "baseURL": "https://gateway.example", "apiKeyEnv": "CUSTOM_API_KEY", "reasoningEffort": "high" }
   },
   "timeoutMs": 600000
 }

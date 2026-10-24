@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { plan, probe, run, listAdapters, RUNTIME_VERSION } from 'js-agent-runtime';
 assert.equal(RUNTIME_VERSION, ${JSON.stringify(JSON.parse(readFileSync('package.json', 'utf8')).version)});
 for (const fn of [plan, probe, run, listAdapters]) assert.equal(typeof fn, 'function');
+assert.deepEqual(listAdapters().map(adapter => adapter.id).sort(), ['claude-code', 'codex', 'cursor-agent', 'deepseek-harness', 'opencode']);
 assert.ok(JSON.parse(readFileSync(new URL(import.meta.resolve('js-agent-runtime/schema')), 'utf8')));
 console.log('Installed tarball imports and schema export passed');
 `);
