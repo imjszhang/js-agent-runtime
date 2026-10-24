@@ -1,0 +1,65 @@
+{
+  "name": "js-agent-runtime",
+  "version": "0.1.0",
+  "description": "Small, provider-aware runtime for local agent CLIs.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema": "./schema/request.schema.json"
+  },
+  "files": [
+    "dist",
+    "schema",
+    "examples",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "test:sandbox": "npm run build && node tests/native-sandbox.mjs",
+    "test:deepseek-native": "npm run build && node tests/native-deepseek.mjs",
+    "prepack": "npm run build",
+    "check:version": "node scripts/version.mjs --check",
+    "version": "node scripts/version.mjs && git add src/plan.ts",
+    "check": "npm run check:version && npm run typecheck && npm test",
+    "prepublishOnly": "npm run check",
+    "test:package": "node scripts/package-smoke.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.9.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjszhang/js-agent-runtime.git"
+  },
+  "homepage": "https://github.com/imjszhang/js-agent-runtime#readme",
+  "bugs": {
+    "url": "https://github.com/imjszhang/js-agent-runtime/issues"
+  },
+  "author": "imjszhang",
+  "keywords": [
+    "agent",
+    "runtime",
+    "codex",
+    "claude-code",
+    "deepseek",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

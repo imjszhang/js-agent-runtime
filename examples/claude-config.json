@@ -1,0 +1,11 @@
+{
+  "runId": "configured-claude-example",
+  "workspace": "/absolute/path/to/staged-workspace",
+  "prompt": "Read the staged instructions and create the requested artifact in this workspace.",
+  "target": {
+    "name": "local-claude",
+    "harness": { "adapter": "claude-code", "executable": "claude", "permission": "bypass" },
+    "backend": { "auth": "claude-config", "model": "configured" }
+  },
+  "timeoutMs": 600000
+}

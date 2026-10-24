@@ -1,0 +1,11 @@
+{
+  "runId": "example-native-login",
+  "workspace": "/absolute/path/to/staged-workspace",
+  "prompt": "Read the supplied instructions and create the requested draft inside this workspace.",
+  "target": {
+    "name": "native-codex",
+    "harness": { "adapter": "codex", "executable": "codex", "permission": "workspace-write" },
+    "backend": { "auth": "chatgpt", "model": "your-model-id" }
+  },
+  "timeoutMs": 600000
+}

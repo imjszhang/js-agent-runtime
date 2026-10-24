@@ -1,0 +1,11 @@
+{
+  "runId": "example-codex-api",
+  "workspace": "/absolute/path/to/staged-workspace",
+  "prompt": "Read the supplied instructions and create the requested draft inside this workspace.",
+  "target": {
+    "name": "custom-codex",
+    "harness": { "adapter": "codex", "executable": "codex", "permission": "workspace-write" },
+    "backend": { "auth": "api-key", "provider": "custom", "model": "your-model-id", "protocol": "responses", "baseURL": "https://gateway.example/v1", "apiKeyEnv": "CUSTOM_API_KEY" }
+  },
+  "timeoutMs": 600000
+}

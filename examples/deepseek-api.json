@@ -1,0 +1,23 @@
+{
+  "runId": "deepseek-example-001",
+  "workspace": "/absolute/path/to/project",
+  "prompt": "Read the project instructions and relevant skills, then create the requested draft for review.",
+  "target": {
+    "name": "deepseek-api",
+    "harness": {
+      "adapter": "deepseek-harness",
+      "executable": "dsh",
+      "permission": "workspace-write",
+      "contextMode": "project"
+    },
+    "backend": {
+      "auth": "api-key",
+      "provider": "deepseek",
+      "model": "REQUIRED_MODEL_ID",
+      "protocol": "anthropic-messages",
+      "baseURL": "https://api.deepseek.com/anthropic",
+      "apiKeyEnv": "DEEPSEEK_API_KEY"
+    }
+  },
+  "timeoutMs": 600000
+}
