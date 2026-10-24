@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { plan, run, probe } from '../dist/index.js';
 import { createDeepseekParser } from '../dist/deepseek-parser.js';
+const fakeCliSkip = process.platform === 'win32' && 'fake CLIs are shebang scripts; Windows cannot start them without a shell';
 
 const secret = 'dsh-test-credential-never-persist';
 const session = { type: 'session', sessionId: 'test-session' };
@@ -16,7 +17,7 @@ function parse(events) {
   return { ...parser.finish(), events: emitted };
 }
 function request(overrides = {}) {
-  return { runId: 'dsh-test', workspace: '/tmp/dsh-workspace', prompt: 'Read the selected rules\nand create a draft.', timeoutMs: 10_000,
+  return { runId: 'dsh-test', workspace: path.resolve('/tmp/dsh-workspace'), prompt: 'Read the selected rules\nand create a draft.', timeoutMs: 10_000,
     target: { name: 'independent-provider', harness: { adapter: 'deepseek-harness', executable: 'dsh', permission: 'workspace-write', ...overrides },
       backend: { auth: 'api-key', provider: 'custom-gateway', model: 'selected-model', protocol: 'anthropic-messages', baseURL: 'https://backend.example/anthropic/', apiKeyEnv: 'SELECTED_KEY' } } };
 }
@@ -112,7 +113,7 @@ if(mode==='hang') {setInterval(()=>{},1000);} else {
   const r = request(); Object.assign(r, { workspace, stateDir: path.join(root, 'state') }); r.target.harness.executable = executable;
   return { root, request: r, options: { runDir: path.join(root, 'logs'), resolveCredential: ref => { assert.equal(ref, 'SELECTED_KEY'); return secret; } } };
 }
-test('DSH executes a file task, redacts credentials, and cleans private state', async t => {
+test('DSH executes a file task, redacts credentials, and cleans private state', { skip: fakeCliSkip }, async t => {
   const f = await fixture(t), events = [];
   const previous = process.env.UNRELATED_PRIVATE_TOKEN; process.env.UNRELATED_PRIVATE_TOKEN = 'unrelated';
   t.after(() => { if (previous === undefined) delete process.env.UNRELATED_PRIVATE_TOKEN; else process.env.UNRELATED_PRIVATE_TOKEN = previous; });
@@ -124,12 +125,12 @@ test('DSH executes a file task, redacts credentials, and cleans private state', 
   assert.equal(logs.join('\n').includes(secret), false);
   await assert.rejects(access(f.request.stateDir));
 });
-test('DSH metadata probe needs no credentials and accepts bare version numbers', async t => {
+test('DSH metadata probe needs no credentials and accepts bare version numbers', { skip: fakeCliSkip }, async t => {
   const f = await fixture(t), r = await probe(plan(f.request), { checkExecutable: true, checkLogin: true });
   assert.equal(r.ok, true); assert.equal(r.checks[0].message, '0.2.0-rc.2'); assert.equal(r.checks[1].status, 'skipped');
   await assert.rejects(access(path.join(f.request.workspace, 'artifact.txt')));
 });
-test('DSH run rejects invalid output and exit status, even after plausible terminal events', async t => {
+test('DSH run rejects invalid output and exit status, even after plausible terminal events', { skip: fakeCliSkip }, async t => {
   for (const scenario of ['bad', 'error', 'missing', 'nonzero']) {
     const f = await fixture(t);
     const r = await run(plan(f.request), { ...f.options, env: { FAKE_SCENARIO: scenario } });
@@ -137,7 +138,7 @@ test('DSH run rejects invalid output and exit status, even after plausible termi
     if (scenario === 'bad') assert.equal(r.usage, null, 'malformed output may conceal usage samples');
   }
 });
-test('DSH cancellation and timeout use the shared process lifecycle', async t => {
+test('DSH cancellation and timeout use the shared process lifecycle', { skip: fakeCliSkip }, async t => {
   for (const cancel of [false, true]) {
     const f = await fixture(t);
     const controller = new AbortController();
@@ -147,7 +148,7 @@ test('DSH cancellation and timeout use the shared process lifecycle', async t =>
     assert.equal(r.status, cancel ? 'cancelled' : 'timed_out'); await assert.rejects(access(f.request.stateDir));
   }
 });
-test('DSH operational environment cannot redirect configuration or inject credentials', async t => {
+test('DSH operational environment cannot redirect configuration or inject credentials', { skip: fakeCliSkip }, async t => {
   const f = await fixture(t);
   for (const key of ['DSH_HOME', 'DSH_PERMISSION_MODE', 'DEEPSEEK_BASE_URL', 'AGENTS_HOME', 'JS_AGENT_RUNTIME_API_KEY']) {
     await assert.rejects(run(plan(f.request), { ...f.options, env: { [key]: 'wrong' } }), /Protected environment/);

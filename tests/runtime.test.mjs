@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, access, symlink } fro
 import os from 'node:os';
 import path from 'node:path';
 import { plan, run, probe, registerAdapter, snapshotDirectory, hashObject, createRedactor } from '../dist/index.js';
+const fakeCliSkip = process.platform === 'win32' && 'fake CLIs are shebang scripts; Windows cannot start them without a shell';
 
 const secret = 'this-is-a-private-test-credential-1847';
 const fakeSource = `#!/usr/bin/env node
@@ -132,7 +133,7 @@ test('Codex native login routes Responses to ChatGPT OAuth while API targets ret
   assert.equal(a[`${apiPrefix}.env_key`],'JS_AGENT_RUNTIME_API_KEY');
   assert.equal(apiPlan.credential.ref,'TEST_CREDENTIAL');
 });
-test('streams ordered redacted events and persists redacted records without inheriting credentials',async t=>{
+test('streams ordered redacted events and persists redacted records without inheriting credentials', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t), events=[]; process.env.UNRELATED_PRIVATE_TOKEN='not-inherited'; t.after(()=>delete process.env.UNRELATED_PRIVATE_TOKEN);
   const r=await run(plan(f.request),{...f.options,onEvent:async e=>{await Promise.resolve();events.push(e)}});
   assert.equal(r.status,'completed'); assert.equal(r.usage.totalTokens,18); assert.equal(r.sessionId,'fake-codex');
@@ -144,7 +145,7 @@ test('streams ordered redacted events and persists redacted records without inhe
   assert.equal(await readFile(path.join(f.workspace,'artifact.txt'),'utf8'),f.request.prompt);
   await assert.rejects(access(f.request.stateDir));
 });
-test('Claude API and native login both execute with normalized Messages usage',async t=>{
+test('Claude API and native login both execute with normalized Messages usage', { skip: fakeCliSkip },async t=>{
   for(const auth of ['api-key','claude-subscription']) {
     const f=await fixture(t,'claude-code',auth);
     const r=await run(plan(f.request),{...f.options,env:{FAKE_SCENARIO:'claude'}});
@@ -152,19 +153,19 @@ test('Claude API and native login both execute with normalized Messages usage',a
     if(auth==='claude-subscription') assert.equal(r.cost,null); else assert.equal(r.cost.total,0.01);
   }
 });
-test('Codex native login executes without requesting a credential',async t=>{
+test('Codex native login executes without requesting a credential', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t,'codex','chatgpt');
   const r=await run(plan(f.request),{...f.options,resolveCredential:()=>{throw new Error('must not run')}});
   assert.equal(r.status,'completed');
 });
-test('terminal event, exit status, malformed output and output bounds are enforced',async t=>{
+test('terminal event, exit status, malformed output and output bounds are enforced', { skip: fakeCliSkip },async t=>{
   for(const mode of ['bad','missing-terminal','failure','overflow']) {
     const f=await fixture(t);
     const r=await run(plan({...f.request,maxOutputBytes:1024}),{...f.options,env:{FAKE_SCENARIO:mode}});
     assert.equal(r.status,'failed',mode); assert.ok(r.error);
   }
 });
-test('timeout and AbortSignal stop the process group',async t=>{
+test('timeout and AbortSignal stop the process group', { skip: fakeCliSkip },async t=>{
   const timeout=await fixture(t);
   const r=await run(plan({...timeout.request,timeoutMs:300,terminationGraceMs:50}),{...timeout.options,env:{FAKE_SCENARIO:'descendant'}});
   assert.equal(r.status,'timed_out');
@@ -176,7 +177,7 @@ test('timeout and AbortSignal stop the process group',async t=>{
   setTimeout(()=>controller.abort(),100);
   assert.equal((await pending).status,'cancelled');
 });
-test('pre-abort and cancelling unresolved credential do not start an agent',async t=>{
+test('pre-abort and cancelling unresolved credential do not start an agent', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t), c=new AbortController();c.abort();
   assert.equal((await run(plan(f.request),{...f.options,signal:c.signal})).status,'cancelled');
   await assert.rejects(access(path.join(f.workspace,'artifact.txt')));
@@ -185,7 +186,7 @@ test('pre-abort and cancelling unresolved credential do not start an agent',asyn
   setTimeout(()=>controller.abort(),50);
   assert.equal((await pending).status,'cancelled');
 });
-test('modified plan, protected env and duplicate record directory are rejected',async t=>{
+test('modified plan, protected env and duplicate record directory are rejected', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t), p=plan(f.request);
   await assert.rejects(run({...p,process:{...p.process,args:['different']}},f.options),/modified/);
   await assert.rejects(run(p,{...f.options,env:{OPENAI_API_KEY:'wrong'}}),/Protected/);
@@ -202,12 +203,12 @@ test('runtime rejects symlinked authentication/log paths into the workspace',asy
   const result=await run(plan(f.request),{...f.options,runDir:path.join(linkedLogs,'runtime')});
   assert.equal(result.status,'failed');assert.match(result.error,/Resolved runDir/);
 });
-test('observer failure interrupts execution and produces a failed result',async t=>{
+test('observer failure interrupts execution and produces a failed result', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t);
   const r=await run(plan(f.request),{...f.options,env:{FAKE_SCENARIO:'hang'},onEvent:()=>{throw new Error(secret)}});
   assert.equal(r.status,'failed'); assert.match(r.error,/observer/); assert.equal(JSON.stringify(r).includes(secret),false);
 });
-test('probe is static by default and native metadata checks use only fake CLI',async t=>{
+test('probe is static by default and native metadata checks use only fake CLI', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t,'codex','chatgpt');
   assert.equal((await probe(plan(f.request))).ok,true);
   const r=await probe(plan(f.request),{checkExecutable:true,checkLogin:true});
@@ -217,7 +218,7 @@ test('probe is static by default and native metadata checks use only fake CLI',a
   assert.equal((await probe(plan(claude.request),{checkExecutable:true,checkLogin:true})).ok,true);
   await assert.rejects(access(claude.request.stateDir));
 });
-test('extensions are registered explicitly and cannot replace built-ins',async t=>{
+test('extensions are registered explicitly and cannot replace built-ins', { skip: fakeCliSkip },async t=>{
   assert.throws(()=>registerAdapter({id:'codex',version:'x'}),/already registered/);
   const f=await fixture(t);
   const unregister=registerAdapter({id:'fake-extension',version:'1',validate:t=>assert.equal(t.backend.auth,'test'),plan:(r)=>({files:[],process:{executable:r.target.harness.executable,args:[],cwd:r.workspace,stdin:r.prompt,env:{FAKE_SCENARIO:'codex'}}}),createParser:()=>({push:()=>[],finish:()=>({completed:true,failed:false,text:'extension',usage:null,cost:null,sessionId:null,responseModel:null,error:null})})});

@@ -4,6 +4,7 @@ import { access, mkdtemp, mkdir, writeFile, readFile, readdir, realpath, rm } fr
 import path from 'node:path';
 import os from 'node:os';
 import { plan, run, probe, registerAdapter } from '../dist/index.js';
+const fakeCliSkip = process.platform === 'win32' && 'fake CLIs are shebang scripts; Windows cannot start them without a shell';
 
 const privateMarker='private-native-account-metadata@example.invalid';
 const credential='test-provider-credential-not-for-metadata';
@@ -52,7 +53,7 @@ async function fixture(t,adapter='codex',auth='api-key'){
 const traces=async f=>(await readFile(f.env.FAKE_TRACE_PATH,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
 async function noExecution(f){await assert.rejects(access(path.join(f.workspace,'executed.txt')));await assert.rejects(access(f.request.stateDir));}
 
-test('native version rejection happens before credential lookup, login or agent execution',async t=>{
+test('native version rejection happens before credential lookup, login or agent execution', { skip: fakeCliSkip },async t=>{
   for(const [adapter,auth,version,reason] of [['claude-code','claude-subscription','2.1.295',/2\.1\.296/],['opencode','api-key','1.9.0',/V2/]]){
     const f=await fixture(t,adapter,auth);let resolutions=0;
     const r=await run(plan(f.request),{...f.options,env:{...f.env,FAKE_VERSION:version},resolveCredential:()=>{resolutions++;return credential;}});
@@ -61,7 +62,7 @@ test('native version rejection happens before credential lookup, login or agent 
   }
 });
 
-test('API version checks use isolated directories and do not receive provider credentials',async t=>{
+test('API version checks use isolated directories and do not receive provider credentials', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t);const events=[];
   const r=await run(plan(f.request),{...f.options,onEvent:event=>events.push(event)});
   assert.equal(r.status,'completed',r.error);
@@ -72,7 +73,7 @@ test('API version checks use isolated directories and do not receive provider cr
   await assert.rejects(access(f.request.stateDir));
 });
 
-test('native login rejection cannot fall back to an API credential or expose identity metadata',async t=>{
+test('native login rejection cannot fall back to an API credential or expose identity metadata', { skip: fakeCliSkip },async t=>{
   for(const [adapter,auth] of [['codex','chatgpt'],['claude-code','claude-subscription']]){
     const f=await fixture(t,adapter,auth);const events=[];
     const r=await run(plan(f.request),{...f.options,env:{...f.env,FAKE_LOGIN:'reject'},resolveCredential:()=>{throw new Error('must not resolve credentials');},onEvent:event=>events.push(event)});
@@ -83,7 +84,7 @@ test('native login rejection cannot fall back to an API credential or expose ide
   }
 });
 
-test('Claude subscription rejects an API login and reports no native API-style cost on success',async t=>{
+test('Claude subscription rejects an API login and reports no native API-style cost on success', { skip: fakeCliSkip },async t=>{
   const rejected=await fixture(t,'claude-code','claude-subscription');
   const denied=await run(plan(rejected.request),{...rejected.options,env:{...rejected.env,FAKE_METHOD:'api_key'}});
   assert.equal(denied.status,'failed');await noExecution(rejected);
@@ -92,7 +93,7 @@ test('Claude subscription rejects an API login and reports no native API-style c
   assert.equal(r.status,'completed',r.error);assert.equal(r.cost,null);assert.equal(r.usage.totalTokens,3);
 });
 
-test('Codex credential-store selection is shared by login metadata and execution',async t=>{
+test('Codex credential-store selection is shared by login metadata and execution', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t,'codex','chatgpt');
   const r=await run(plan(f.request),{...f.options,resolveCredential:()=>{throw new Error('must not resolve credentials');}});
   assert.equal(r.status,'completed',r.error);
@@ -106,7 +107,7 @@ test('Codex credential-store selection is shared by login metadata and execution
   for(const row of probeRows)await assert.rejects(access(row.cwd));
 });
 
-test('version and login checks share the task and probe deadlines',async t=>{
+test('version and login checks share the task and probe deadlines', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t,'claude-code','claude-subscription');
   const env={...f.env,FAKE_VERSION_DELAY:'300',FAKE_LOGIN_DELAY:'300'};
   const r=await run(plan({...f.request,timeoutMs:500}),{...f.options,env});
@@ -117,7 +118,7 @@ test('version and login checks share the task and probe deadlines',async t=>{
   for(const row of (await traces(f)).slice(-2))await assert.rejects(access(row.cwd));
 });
 
-test('cancellation during metadata stops descendants and removes temporary state',async t=>{
+test('cancellation during metadata stops descendants and removes temporary state', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t),controller=new AbortController();
   const pending=run(plan(f.request),{...f.options,env:{...f.env,FAKE_HANG:'version'},signal:controller.signal});
   const started=Date.now();
@@ -129,7 +130,7 @@ test('cancellation during metadata stops descendants and removes temporary state
   assert.throws(()=>process.kill(pid,0));assert.deepEqual((await traces(f)).map(x=>x.phase),['version']);
 });
 
-test('legacy extensions are not forced through built-in metadata, and probe uses the planned executable',async t=>{
+test('legacy extensions are not forced through built-in metadata, and probe uses the planned executable', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t);const id='preflight-extension';
   const unregister=registerAdapter({id,version:'1',validate:()=>{},probeArgs:['--version'],
     plan:request=>({files:[],process:{executable:f.request.target.harness.executable,args:[],cwd:request.workspace,stdin:request.prompt,env:{...f.env,HOME:f.request.stateDir}}}),
@@ -141,7 +142,7 @@ test('legacy extensions are not forced through built-in metadata, and probe uses
   const p=await probe(execution,{checkExecutable:true});assert.equal(p.ok,true,JSON.stringify(p));assert.equal(p.executable,execution.process.executable);
 });
 
-test('standard inherited proxies reach native processes and are redacted from run and probe outputs',async t=>{
+test('standard inherited proxies reach native processes and are redacted from run and probe outputs', { skip: fakeCliSkip },async t=>{
   const proxy='https://fake-proxy-user:fake-proxy-password@proxy.example.invalid:8443';
   const replacements={HTTPS_PROXY:proxy,CUSTOM_PROXY:'private-nonstandard-proxy',UNRELATED_SERVICE_KEY:'private-unrelated-provider-key'};
   const previous=Object.fromEntries(Object.keys(replacements).map(key=>[key,process.env[key]]));

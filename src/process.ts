@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { ProcessPlan } from "./types.js";
 
@@ -28,19 +29,37 @@ const allowedInherited = ["PATH", "PATHEXT", "SystemRoot", "SYSTEMROOT", "COMSPE
 export function baseEnvironment(): Record<string, string> {
   return Object.fromEntries(allowedInherited.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));
 }
-/** No shell interpolation. POSIX children own a process group, including renderer descendants. */
+const windows = process.platform === "win32";
+/** Windows has no process groups for console children; taskkill ends the whole tree at once. Synchronous for exit handlers. */
+function killWindowsTree(pid: number): boolean {
+  const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe");
+  const killed = spawnSync(taskkill, ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, timeout: 10_000 });
+  // 128: the process no longer exists.
+  return !killed.error && (killed.status === 0 || killed.status === 128);
+}
+/** No shell interpolation. POSIX children own a process group, including renderer descendants.
+ * Windows children are ended as a process tree while the root is still running. */
 export async function runProcess(processPlan: ProcessPlan, options: ProcessOptions): Promise<ProcessResult> {
-  if (process.platform === "win32") throw new Error("Process-group isolation currently requires POSIX (macOS/Linux)");
   const empty = (): ProcessResult => ({ stdout: "", stderr: "", exitCode: null, signal: null, timedOut: false, cancelled: false, error: null });
   if (options.signal?.aborted) return { ...empty(), cancelled: true, error: "Run cancelled before process start" };
   return new Promise(resolve => {
     const result = empty();
-    const child = spawn(processPlan.executable, processPlan.args, { cwd: processPlan.cwd, env: processPlan.env, shell: false, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    // On Windows `detached` means DETACHED_PROCESS (no console), not a process group.
+    const child = spawn(processPlan.executable, processPlan.args, { cwd: processPlan.cwd, env: processPlan.env, shell: false, ...(windows ? { windowsHide: true } : { detached: true }), stdio: ["pipe", "pipe", "pipe"] });
     let finished = false, terminating = false, bytes = 0;
     const limit = options.maxOutputBytes ?? 16_777_216, grace = options.terminationGraceMs ?? 500;
     const buffers = { stdout: "", stderr: "" }, decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
     let killTimer: NodeJS.Timeout | undefined, closeTimer: NodeJS.Timeout | undefined;
-    const signalGroup = (signal: NodeJS.Signals): void => { if (child.pid) { try { process.kill(-child.pid, signal); } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== "ESRCH") result.error ??= "Could not signal child process group"; } } };
+    const signalGroup = (signal: NodeJS.Signals): void => {
+      if (!child.pid) return;
+      if (windows) {
+        // There is no graceful signal for a console tree. Windows reuses PIDs quickly,
+        // so only a root that has not exited yet is addressed.
+        if (child.exitCode === null && child.signalCode === null && !killWindowsTree(child.pid)) result.error ??= "Could not terminate child process tree";
+        return;
+      }
+      try { process.kill(-child.pid, signal); } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== "ESRCH") result.error ??= "Could not signal child process group"; }
+    };
     let unregister = (): void => {};
     const line = (stream: "stdout" | "stderr", value: string): void => {
       try { options.onLine?.(stream, value); } catch { result.error ??= "Process output consumer failed"; terminate(); }

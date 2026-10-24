@@ -7,11 +7,12 @@ import vm from 'node:vm';
 import { plan, run, probe } from '../dist/index.js';
 import { createOpenCodeParser } from '../dist/opencode-parser.js';
 import { planOpenCodeInspection, parseOpenCodeInspection } from '../dist/opencode.js';
+const fakeCliSkip = process.platform === 'win32' && 'fake CLIs are shebang scripts; Windows cannot start them without a shell';
 
 const tokens = { input: 10, output: 3, reasoning: 2, cache: { read: 7, write: 1 } };
 const expectedUsage = { inputTokens: 18, outputTokens: 5, totalTokens: 23, cachedInputTokens: 7, reasoningTokens: 2 };
 function request(harness = {}) {
-  return { runId: 'opencode-test', workspace: '/tmp/opencode-workspace', prompt: 'Fix it\nwithout interactive input', timeoutMs: 10_000,
+  return { runId: 'opencode-test', workspace: path.resolve('/tmp/opencode-workspace'), prompt: 'Fix it\nwithout interactive input', timeoutMs: 10_000,
     target: { name: 'isolated-opencode', harness: { adapter: 'opencode', executable: 'opencode', permission: 'workspace-write', ...harness },
       backend: { auth: 'api-key', provider: 'custom-gateway', model: 'test-model', protocol: 'chat-completions', baseURL: 'https://backend.example/v1/', apiKeyEnv: 'SELECTED_KEY' } } };
 }
@@ -191,7 +192,7 @@ if(mode==='native-error') console.log(JSON.stringify({type:'error',sessionID:'se
   return { input, root };
 }
 
-test('OpenCode runtime verifies a durable export, redacts logs and cleans isolated state', async t => {
+test('OpenCode runtime verifies a durable export, redacts logs and cleans isolated state', { skip: fakeCliSkip }, async t => {
   const { input, root } = await fixture(t), runDir = path.join(root, 'logs'), observed = [];
   const result = await run(plan(input), { runDir, resolveCredential: () => 'opencode-test-secret', onEvent: e => { observed.push(e); } });
   assert.equal(result.status, 'completed', result.error); assert.equal(result.text, 'Hello'); assert.deepEqual(result.usage, expectedUsage);
@@ -200,7 +201,7 @@ test('OpenCode runtime verifies a durable export, redacts logs and cleans isolat
   await assert.rejects(access(input.stateDir), /ENOENT/);
 });
 
-test('OpenCode runtime rejects mismatched exports and preserves native stream errors', async t => {
+test('OpenCode runtime rejects mismatched exports and preserves native stream errors', { skip: fakeCliSkip }, async t => {
   for (const mode of ['bad-export', 'native-error']) {
     const { input } = await fixture(t);
     const result = await run(plan(input), { resolveCredential: () => 'opencode-test-secret', env: { TEST_SCENARIO: mode } });
@@ -209,7 +210,7 @@ test('OpenCode runtime rejects mismatched exports and preserves native stream er
   }
 });
 
-test('OpenCode inspection shares the task deadline and version checks reject V1', async t => {
+test('OpenCode inspection shares the task deadline and version checks reject V1', { skip: fakeCliSkip }, async t => {
   const { input } = await fixture(t); input.timeoutMs = 600;
   const result = await run(plan(input), { resolveCredential: () => 'opencode-test-secret', env: { TEST_SCENARIO: 'inspection-timeout' } });
   assert.equal(result.status, 'timed_out'); assert.equal(result.usage, null);
@@ -218,7 +219,7 @@ test('OpenCode inspection shares the task deadline and version checks reject V1'
 });
 
 
-test('OpenCode zero exit cannot bypass missing sessions, malformed events or bounded export output', async t => {
+test('OpenCode zero exit cannot bypass missing sessions, malformed events or bounded export output', { skip: fakeCliSkip }, async t => {
   for (const mode of ['no-session', 'malformed', 'inspection-overflow']) {
     const { input } = await fixture(t); input.maxOutputBytes = 1024;
     const result = await run(plan(input), { resolveCredential: () => 'opencode-test-secret', env: { TEST_SCENARIO: mode } });
@@ -227,13 +228,13 @@ test('OpenCode zero exit cannot bypass missing sessions, malformed events or bou
   }
 });
 
-test('OpenCode V1 run is refused before resolving the model credential', async t => {
+test('OpenCode V1 run is refused before resolving the model credential', { skip: fakeCliSkip }, async t => {
   const { input } = await fixture(t); let resolved = false;
   const result = await run(plan(input), { resolveCredential: () => { resolved = true; return 'opencode-test-secret'; }, env: { TEST_SCENARIO: 'old-version' } });
   assert.equal(result.status, 'failed'); assert.match(result.error, /V2/); assert.equal(resolved, false);
 });
 
-test('OpenCode never reports stream counters as complete usage without successful inspection', async t => {
+test('OpenCode never reports stream counters as complete usage without successful inspection', { skip: fakeCliSkip }, async t => {
   for (const mode of ['main-failure', 'main-timeout']) {
     const { input } = await fixture(t); input.timeoutMs = 600; input.terminationGraceMs = 30;
     const result = await run(plan(input), { resolveCredential: () => 'opencode-test-secret', env: { TEST_SCENARIO: mode } });

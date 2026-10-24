@@ -2,7 +2,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { builtInAdapters } from "./adapters.js";
 import { hashObject } from "./snapshot.js";
-import { absolute, envName, keys, name, overlaps, record, text, validateRequest } from "./validation.js";
+import { absolute, envName, keys, name, nativeExecutable, overlaps, record, text, validateRequest } from "./validation.js";
 import type { Adapter, AdapterPlan, ExecutionPlan, RunRequest } from "./types.js";
 
 export const RUNTIME_VERSION = "0.2.0";
@@ -21,7 +21,7 @@ export function listAdapters(): Array<{ id: string; version: string }> { return 
 function validateAdapterPlan(p: AdapterPlan, request: RunRequest, state: string): void {
   const raw = record(p, "adapter plan"); keys(raw, ["process", "files", "credential"], "adapter plan");
   const proc = record(p.process, "process"); keys(proc, ["executable", "args", "cwd", "stdin", "env"], "process");
-  text(proc.executable, "process.executable");
+  nativeExecutable(proc.executable, "process.executable");
   if (proc.cwd !== request.workspace || proc.stdin !== request.prompt) throw new Error("Adapter must retain the requested workspace and prompt");
   if (!Array.isArray(proc.args) || !proc.args.every(a => typeof a === "string" && !a.includes("\0"))) throw new Error("Adapter args must be a string array");
   for (const [key, value] of Object.entries(record(proc.env, "process.env"))) { envName(key, "environment key"); if (typeof value !== "string" || value.includes("\0")) throw new Error("Invalid process environment"); }

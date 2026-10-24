@@ -31,6 +31,13 @@ export function envName(value: unknown, label: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(result)) throw new Error(`${label} must be an environment variable name`);
   return result;
 }
+/** Windows only starts .cmd/.bat files through cmd.exe; runtime never uses a shell. */
+export function nativeExecutable(value: unknown, label: string): string {
+  const result = text(value, label);
+  if (process.platform === "win32" && /\.(?:cmd|bat)[.\s]*$/iu.test(result)) throw new Error(`${label} must be a native executable on Windows; .cmd and .bat launchers (such as npm shims) require a shell`);
+  return result;
+}
+/** Windows path.relative compares case-insensitively, so differently cased aliases still overlap. */
 export function overlaps(a: string, b: string): boolean {
   const inside = (parent: string, child: string): boolean => { const r = path.relative(parent, child); return r === "" || (!r.startsWith(`..${path.sep}`) && r !== ".." && !path.isAbsolute(r)); };
   return inside(a, b) || inside(b, a);
@@ -48,7 +55,7 @@ export function validateTarget(value: unknown): Target {
     if (key === "nativeStallTimeoutMs") integer(h[key], `harness.${key}`, 30_000, 300_000);
     else if (typeof h[key] !== "boolean") throw new Error(`harness.${key} must be boolean`);
   }
-  return { name: name(raw.name, "target.name"), harness: { ...h, adapter: name(h.adapter, "harness.adapter"), executable: text(h.executable, "harness.executable"), permission: h.permission } as Target["harness"], backend: structuredClone(record(raw.backend, "backend")) as Target["backend"] };
+  return { name: name(raw.name, "target.name"), harness: { ...h, adapter: name(h.adapter, "harness.adapter"), executable: nativeExecutable(h.executable, "harness.executable"), permission: h.permission } as Target["harness"], backend: structuredClone(record(raw.backend, "backend")) as Target["backend"] };
 }
 export function validateBackend(target: Target): Backend {
   const raw = record(target.backend, "backend");

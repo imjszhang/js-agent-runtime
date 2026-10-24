@@ -11,10 +11,11 @@ import { CURSOR_AGENT_VERSION, assertCursorAgentVersion, cursorEnvironment, curs
 import { planCursorShell } from '../dist/cursor-shell.js';
 import { planCursorLauncher } from '../dist/cursor-launcher.js';
 import { planCursorRuntime } from '../dist/cursor-runtime.js';
+const cursorSkip = process.platform === 'win32' && 'Cursor Agent requires POSIX bash';
 
 const secret = 'cursor-test-secret-never-persist';
 function request(harness = {}, backend = {}) {
-  return { runId: 'cursor-test', workspace: '/tmp/cursor-workspace', prompt: 'Create the draft.\nPreserve Chinese: 中文。', timeoutMs: 10_000,
+  return { runId: 'cursor-test', workspace: path.resolve('/tmp/cursor-workspace'), prompt: 'Create the draft.\nPreserve Chinese: 中文。', timeoutMs: 10_000,
     target: { name: 'native-cursor', harness: { adapter: 'cursor-agent', executable: 'cursor-agent', permission: 'workspace-write', ...harness },
       backend: { auth: 'cursor-api-key', model: 'auto', ...backend } } };
 }
@@ -23,7 +24,7 @@ const final = { type: 'result', subtype: 'success', is_error: false, session_id:
 function parsed(events, r = request()) { const parser = createCursorParser(r); const emitted = events.flatMap(event => parser.push(event)); return { ...parser.finish(), events: emitted }; }
 const config = (p, suffix) => JSON.parse(p.files.find(file => file.path.endsWith(suffix)).content);
 
-test('Cursor plan is deterministic, native, isolated and credential-free', () => {
+test('Cursor plan is deterministic, native, isolated and credential-free', { skip: cursorSkip }, () => {
   const r = request({ useHttp1ForAgent: true, nativeStallTimeoutMs: 120_000 }), p = plan(r);
   assert.deepEqual(plan(r), p);
   assert.deepEqual(p.credential, { ref: 'CURSOR_API_KEY', envVar: 'CURSOR_API_KEY' });
@@ -42,7 +43,7 @@ test('Cursor plan is deterministic, native, isolated and credential-free', () =>
   assert.equal(plan(request({}, { apiKeyEnv: 'SELECTED_CURSOR_KEY' })).credential.ref, 'SELECTED_CURSOR_KEY');
 });
 
-test('Cursor permission levels are explicit and HTTP transport remains opt-in', () => {
+test('Cursor permission levels are explicit and HTTP transport remains opt-in', { skip: cursorSkip }, () => {
   const ro = plan(request({ permission: 'read-only' }));
   assert.equal(ro.process.args[ro.process.args.indexOf('--mode') + 1], 'ask');
   assert.equal(config(ro, 'sandbox.json').type, 'workspace_readonly');
@@ -56,7 +57,7 @@ test('Cursor permission levels are explicit and HTTP transport remains opt-in', 
   assert.equal(config(full, 'sandbox.json').type, 'insecure_none');
 });
 
-test('Cursor rejects provider routing, foreign auth/options, path patterns and unsupported versions', () => {
+test('Cursor rejects provider routing, foreign auth/options, path patterns and unsupported versions', { skip: cursorSkip }, () => {
   for (const backend of [{ auth: 'api-key' }, { auth: 'claude-subscription' }, { provider: 'deepseek' }, { protocol: 'responses' }, { baseURL: 'https://api.example' }, { reasoningEffort: 'high' }, { apiKeyEnv: 'bad-name' }, { model: 'configured' }]) assert.throws(() => plan(request({}, backend)));
   for (const nativeStallTimeoutMs of [29_999, 300_001, 30_000.5, NaN]) assert.throws(() => plan(request({ nativeStallTimeoutMs })));
   assert.throws(() => plan({ ...request(), workspace: '/tmp/pattern[workspace]' }), /pattern/);
@@ -66,7 +67,7 @@ test('Cursor rejects provider routing, foreign auth/options, path patterns and u
   assert.throws(() => plan(other));
 });
 
-test('Cursor metadata plans avoid launcher, preload and API credentials', () => {
+test('Cursor metadata plans avoid launcher, preload and API credentials', { skip: cursorSkip }, () => {
   const r = request({ nativeStallTimeoutMs: 300_000, useCurrentUserHomeForLogin: true });
   const p = plan(r); assert.equal(p.process.env.HOME, p.stateDir, 'API-key mode stays isolated on macOS and Linux even with the login-only flag');
   const version = cursorVersionProcess(r, '/tmp/cursor-probe');
@@ -135,7 +136,7 @@ if(mode==='hang')setInterval(()=>{},1000);else{
   return { root, request: r, options: { runDir: path.join(root, 'logs'), resolveCredential: ref => { assert.equal(ref, 'CURSOR_API_KEY'); return secret; } } };
 }
 
-test('Cursor executes through native launcher, scrubs tool credentials and persists only redacted output', async t => {
+test('Cursor executes through native launcher, scrubs tool credentials and persists only redacted output', { skip: cursorSkip }, async t => {
   const f = await fixture(t), events = [];
   const r = await run(plan(f.request), { ...f.options, onEvent: event => { events.push(event); } });
   assert.equal(r.status, 'completed', r.error); assert.equal(r.usage, null); assert.equal(r.cost, null);
@@ -145,7 +146,7 @@ test('Cursor executes through native launcher, scrubs tool credentials and persi
   await assert.rejects(access(f.request.stateDir));
 });
 
-test('Cursor explicit bypass executes with native shell and disabled sandbox', async t => {
+test('Cursor explicit bypass executes with native shell and disabled sandbox', { skip: cursorSkip }, async t => {
   const f = await fixture(t); f.request.target.harness.permission = 'bypass';
   const r = await run(plan(f.request), f.options);
   assert.equal(r.status, 'completed', r.error); assert.equal(r.text.includes(secret), false);
@@ -153,7 +154,7 @@ test('Cursor explicit bypass executes with native shell and disabled sandbox', a
   await assert.rejects(access(f.request.stateDir));
 });
 
-test('Cursor preflight rejects unreviewed versions and .cursor input before native task execution', async t => {
+test('Cursor preflight rejects unreviewed versions and .cursor input before native task execution', { skip: cursorSkip }, async t => {
   for (const scenario of ['version', 'config']) {
     const f = await fixture(t);
     if (scenario === 'config') await writeFile(path.join(f.request.workspace, '.cursor'), 'user input preserved');
@@ -163,7 +164,7 @@ test('Cursor preflight rejects unreviewed versions and .cursor input before nati
   }
 });
 
-test('Cursor metadata probe uses original CLI without running a task or resolving credentials', async t => {
+test('Cursor metadata probe uses original CLI without running a task or resolving credentials', { skip: cursorSkip }, async t => {
   const f = await fixture(t);
   const r = await probe(plan(f.request), { checkExecutable: true, checkLogin: true });
   assert.equal(r.ok, true, JSON.stringify(r)); assert.equal(r.checks[1].status, 'skipped');
@@ -171,7 +172,7 @@ test('Cursor metadata probe uses original CLI without running a task or resolvin
   const wrong = await probe(plan(f.request), { checkExecutable: true, env: { FAKE_SCENARIO: 'version' } }); assert.equal(wrong.ok, false);
 });
 
-test('Cursor metadata and execution select the same CLI when an operational PATH differs', async t => {
+test('Cursor metadata and execution select the same CLI when an operational PATH differs', { skip: cursorSkip }, async t => {
   const f = await fixture(t), originalPath = process.env.PATH;
   t.after(() => { if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath; });
   process.env.PATH = `${f.root}${path.delimiter}${originalPath ?? '/usr/bin:/bin'}`;
@@ -191,14 +192,14 @@ test('Cursor native login is checked before execution and incomplete login never
   assert.equal(JSON.stringify(r).includes('must-not-emit'), false);
 });
 
-test('Cursor malformed streams, bad metadata and nonzero exits cannot produce success', async t => {
+test('Cursor malformed streams, bad metadata and nonzero exits cannot produce success', { skip: cursorSkip }, async t => {
   for (const scenario of ['malformed', 'error', 'missing', 'workspace', 'nonzero']) {
     const f = await fixture(t), r = await run(plan(f.request), { ...f.options, env: { FAKE_SCENARIO: scenario } });
     assert.equal(r.status, 'failed', scenario); assert.ok(r.error); assert.equal(JSON.stringify(r).includes(secret), false);
   }
 });
 
-test('Cursor cancellation and timeout use the shared process lifecycle', async t => {
+test('Cursor cancellation and timeout use the shared process lifecycle', { skip: cursorSkip }, async t => {
   for (const cancel of [false, true]) {
     const f = await fixture(t), controller = new AbortController();
     const pending = run(plan({ ...f.request, timeoutMs: cancel ? 5000 : 500, terminationGraceMs: 30 }), { ...f.options, signal: controller.signal, env: { FAKE_SCENARIO: 'hang' } });
@@ -207,12 +208,12 @@ test('Cursor cancellation and timeout use the shared process lifecycle', async t
   }
 });
 
-test('Cursor root .cursor checks include dangling links and do not read their target', async t => {
+test('Cursor root .cursor checks include dangling links and do not read their target', { skip: cursorSkip }, async t => {
   const f = await fixture(t); await symlink(path.join(f.root, 'missing'), path.join(f.request.workspace, '.cursor'));
   await assert.rejects(assertCursorWorkspace(f.request.workspace), /\.cursor/);
 });
 
-test('Cursor shell preserves standard proxies, skips rc files and removes credentials', async t => {
+test('Cursor shell preserves standard proxies, skips rc files and removes credentials', { skip: cursorSkip }, async t => {
   const f = await fixture(t), home = path.join(f.root, "shell 'quoted"), shell = planCursorShell(home);
   for (const file of shell.files) { await mkdir(path.dirname(file.path), { recursive: true }); await writeFile(file.path, file.content, { mode: file.mode }); }
   const rc = path.join(f.root, 'rc'); await writeFile(rc, 'exit 88\n');
@@ -247,7 +248,7 @@ test('Cursor stall preload fails closed for altered bundles, wrong entry and amb
   const p = planCursorRuntime('/tmp/cursor runtime', 120_000), duplicate = runtimeFixture({ nodeOptions: `${p.env.NODE_OPTIONS} ${p.env.NODE_OPTIONS}` }); duplicate.install(); assert.throws(() => duplicate.load(), /removed safely/);
 });
 
-test('Cursor launchers reject nonexistent executables and shell builtins', async t => {
+test('Cursor launchers reject nonexistent executables and shell builtins', { skip: cursorSkip }, async t => {
   const f = await fixture(t);
   for (const [name, code] of [['missing-js-agent-runtime-cursor', 127], ['printf', 126]]) {
     const p = planCursorLauncher(path.join(f.root, name), name);

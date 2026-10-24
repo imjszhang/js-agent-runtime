@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { plan, probe, run } from '../dist/index.js';
+const fakeCliSkip = process.platform === 'win32' && 'fake CLIs are shebang scripts; Windows cannot start them without a shell';
 
 const secret = 'fake-user-owned-token-never-copied-to-runtime';
 const source = `#!/usr/bin/env node
@@ -111,7 +112,7 @@ test('bypass permits explicit API access but rejects subscription auth before cr
   await assert.rejects(fsp.access(f.request.stateDir));
 });
 
-test('configured execution leaves config unchanged and records the actual init model without resolving credentials',async t=>{
+test('configured execution leaves config unchanged and records the actual init model without resolving credentials', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t),before=await fsp.readFile(path.join(f.configDir,'settings.json'));
   const runDir=path.join(f.dir,'logs');
   const result=await run(plan(f.request),{runDir,resolveCredential:()=>{throw new Error('native config must own authentication')}});
@@ -124,7 +125,7 @@ test('configured execution leaves config unchanged and records the actual init m
   await assert.rejects(fsp.access(f.request.stateDir));
 });
 
-test('configured probe accepts native CLI login verdict without assuming OAuth method or provider endpoint',async t=>{
+test('configured probe accepts native CLI login verdict without assuming OAuth method or provider endpoint', { skip: fakeCliSkip },async t=>{
   const f=await fixture(t),p=plan(f.request);
   const result=await probe(p,{checkExecutable:true,checkLogin:true});
   assert.equal(result.ok,true);assert.match(result.checks.find(x=>x.name==='login').message,/endpoint and model compatibility are not verified/);
@@ -143,7 +144,7 @@ test('configured authentication directory is protected against direct and resolv
 });
 
 
-test('project context enables native Skill discovery without dropping bypass or credential isolation', async t => {
+test('project context enables native Skill discovery without dropping bypass or credential isolation', { skip: fakeCliSkip }, async t => {
   const f = await fixture(t);
   f.request.target.harness.contextMode = 'project';
   const p = plan(f.request);
