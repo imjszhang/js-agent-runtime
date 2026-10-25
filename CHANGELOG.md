@@ -5,6 +5,10 @@ during 0.x development, breaking changes increment the minor version.
 
 ## [Unreleased]
 
+- Run Cursor Agent on native Windows. Point `harness.executable` at the version directory's `node.exe` (the `agent.cmd` shim is still rejected). The adapter starts the sibling `index.js` without a shell. `cursor-login` reads the Windows user credential file only when `useCurrentUserHomeForLogin` is set and never copies it. Workspace-write puts a PowerShell PATH shim ahead of the host shell to strip credential-like variables. Reviewed builds are `2026.07.23-e383d2b` and `2026.10.22-27dcf5f`. Cursor adapter version is now 2; recreate older plans. The stall-timeout preload remains bound to the first build and fails closed on any other bundle.
+
+- Preserve Windows PowerShell arguments without doubling ordinary backslashes; isolate tool home/application-data directories and force `-NoProfile` while retaining native login inputs only in the parent Cursor process.
+
 ## [0.2.1] - 2026-10-25
 
 - Add basic native Windows execution support. Live Windows validation covers Claude Code with `claude-config` and `bypass` only; other adapters and sandbox modes remain unverified on Windows, and Cursor remains POSIX-only.

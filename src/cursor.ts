@@ -3,13 +3,14 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createCursorParser } from "./cursor-parser.js";
 import { planCursorShell } from "./cursor-shell.js";
-import { planCursorLauncher } from "./cursor-launcher.js";
+import { cursorCommandPrefix, planCursorLauncher } from "./cursor-launcher.js";
 import { planCursorRuntime } from "./cursor-runtime.js";
 import { absolute, envName, keys, overlaps, record, text } from "./validation.js";
 import type { Adapter, AdapterPlan, ProcessPlan, RunRequest, Target } from "./types.js";
 
-/** Hidden isolation flags and stream format are reviewed against this build. */
-export const CURSOR_AGENT_VERSION = "2026.07.23-e383d2b";
+/** Stream format reviewed against these builds. The stall preload remains bound to the first. */
+export const CURSOR_AGENT_VERSIONS = ["2026.07.23-e383d2b", "2026.10.22-27dcf5f"] as const;
+export const CURSOR_AGENT_VERSION = CURSOR_AGENT_VERSIONS[0];
 export type CursorAuth = "cursor-login" | "cursor-api-key";
 type CursorBackend = { auth: CursorAuth; model: string; apiKeyEnv?: string };
 export type CursorAccountStatus = { auth: "cursor-login"; credentialPresent: boolean; verified: false };
@@ -35,11 +36,13 @@ export function cursorCommonArgs(): string[] {
 export function cursorEnvironment(stateDir: string, auth: CursorAuth, useCurrentUserHomeForLogin = false): Record<string, string> {
   const home = absolute(stateDir, "Cursor stateDir");
   if (auth !== "cursor-login" && auth !== "cursor-api-key") throw new Error("Unsupported Cursor authentication mode");
-  if (auth === "cursor-login" && process.platform !== "darwin") throw new Error("Cursor native login requires macOS Keychain; use cursor-api-key on other POSIX platforms");
-  if (process.platform === "win32") throw new Error("Cursor Agent currently requires POSIX");
+  if (auth === "cursor-login" && process.platform !== "darwin" && process.platform !== "win32") throw new Error("Cursor native login requires macOS Keychain or Windows user credentials; use cursor-api-key on other POSIX platforms");
+  if (auth === "cursor-login" && process.platform === "win32" && !useCurrentUserHomeForLogin) throw new Error("Cursor native login on Windows requires harness.useCurrentUserHomeForLogin; the runtime does not copy the user credential file");
+  const realHome = auth === "cursor-login" && useCurrentUserHomeForLogin;
   return {
-    HOME: auth === "cursor-login" && useCurrentUserHomeForLogin ? homedir() : home,
-    USERPROFILE: auth === "cursor-login" && useCurrentUserHomeForLogin ? homedir() : home,
+    HOME: realHome ? homedir() : home,
+    USERPROFILE: realHome ? homedir() : home,
+    ...(realHome && process.platform === "win32" ? { APPDATA: process.env.APPDATA ?? path.join(homedir(), "AppData", "Roaming") } : {}),
     CURSOR_CONFIG_DIR: path.join(home, ".cursor"), CURSOR_DATA_DIR: path.join(home, ".cursor-data"),
     XDG_CONFIG_HOME: path.join(home, ".config"), XDG_CACHE_HOME: path.join(home, ".cache"),
     XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"),
@@ -50,7 +53,8 @@ export function cursorEnvironment(stateDir: string, auth: CursorAuth, useCurrent
 }
 
 export function assertCursorAgentVersion(version: string): void {
-  if (version.trim() !== CURSOR_AGENT_VERSION) throw new Error(`Cursor Agent requires the reviewed version ${CURSOR_AGENT_VERSION}`);
+  const trimmed = version.trim();
+  if (!(CURSOR_AGENT_VERSIONS as readonly string[]).includes(trimmed)) throw new Error(`Cursor Agent requires a reviewed version (${CURSOR_AGENT_VERSIONS.join(", ")})`);
 }
 
 /** Never return native identity, token values, or raw authentication diagnostics. */
@@ -67,13 +71,17 @@ export function parseCursorAccountStatus(stdout: string): CursorAccountStatus {
 
 /** Probes use the original CLI with isolated HOME and no preload or credential. */
 export function cursorVersionProcess(request: RunRequest, stateDir: string): ProcessPlan {
-  return { executable: request.target.harness.executable, args: [...cursorCommonArgs(), "--version"], cwd: stateDir, stdin: "", env: cursorEnvironment(stateDir, "cursor-api-key") };
+  return { executable: request.target.harness.executable, args: [...cursorCommandPrefix(request.target.harness.executable), ...cursorCommonArgs(), "--version"], cwd: stateDir, stdin: "", env: cursorEnvironment(stateDir, "cursor-api-key") };
 }
 
 export function cursorLoginProcess(request: RunRequest, stateDir: string): ProcessPlan {
   const backend = validateCursorBackend(request.target);
   if (backend.auth !== "cursor-login") throw new Error("Cursor login metadata requires cursor-login authentication");
-  return { executable: request.target.harness.executable, args: [...cursorCommonArgs(), "status", "--format", "json"], cwd: stateDir, stdin: "", env: cursorEnvironment(stateDir, backend.auth, request.target.harness.useCurrentUserHomeForLogin) };
+  return { executable: request.target.harness.executable, args: [...cursorCommandPrefix(request.target.harness.executable), ...cursorCommonArgs(), "status", "--format", "json"], cwd: stateDir, stdin: "", env: cursorEnvironment(stateDir, backend.auth, request.target.harness.useCurrentUserHomeForLogin) };
+}
+
+function named(filePath: string, base: string): boolean {
+  return path.basename(filePath) === base;
 }
 
 /** Project hooks load separately from CLI permissions; never delete user input. */
@@ -124,23 +132,25 @@ export function planCursor(request: RunRequest, stateDir: string): AdapterPlan {
     args[args.indexOf("--sandbox") + 1] = "disabled";
     args.splice(args.indexOf("--allowed-tools"), 2);
     args.push("--force");
-    plan.process.env.PATH = process.env.PATH ?? "/usr/bin:/bin";
-    plan.process.env.SHELL = "/bin/bash";
+    plan.process.env.PATH = process.env.PATH ?? (process.platform === "win32" ? "" : "/usr/bin:/bin");
+    plan.process.env.SHELL = process.platform === "win32"
+      ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+      : "/bin/bash";
     for (const file of plan.files) {
-      if (file.path.endsWith("/cli-config.json")) {
+      if (named(file.path, "cli-config.json")) {
         const config = record(JSON.parse(file.content));
         config.permissions = { allow: ["Read(*)", "Write(*)", "Shell(*)", "WebFetch(*)"], deny: ["Mcp(*:*)"] };
         config.sandbox = { mode: "disabled" };
         file.content = JSON.stringify(config, null, 2) + "\n";
       }
-      if (file.path.endsWith("/sandbox.json")) file.content = JSON.stringify({ type: "insecure_none", networkPolicy: { default: "allow", allow: [], deny: [] } }) + "\n";
+      if (named(file.path, "sandbox.json")) file.content = JSON.stringify({ type: "insecure_none", networkPolicy: { default: "allow", allow: [], deny: [] } }) + "\n";
     }
   }
   return plan;
 }
 
 export const cursorAdapter: Adapter = {
-  id: "cursor-agent", version: "1", validate: target => { validateCursorBackend(target); },
+  id: "cursor-agent", version: "2", validate: target => { validateCursorBackend(target); },
   plan: (request, context) => planCursor(request, context.stateDir), createParser: createCursorParser,
   probeArgs: [...cursorCommonArgs(), "--version"],
 };

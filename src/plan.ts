@@ -28,11 +28,12 @@ function validateAdapterPlan(p: AdapterPlan, request: RunRequest, state: string)
   if (!Array.isArray(p.files)) throw new Error("Adapter files must be an array");
   const seen = new Set<string>();
   for (const file of p.files) {
-    keys(record(file), ["path", "content", "mode"], "planned file");
+    keys(record(file), ["path", "content", "mode", "encoding"], "planned file");
     const target = absolute(file.path, "planned file path");
     if (!target.startsWith(`${state}${path.sep}`) || seen.has(target)) throw new Error("Adapter files must be unique files inside stateDir");
     seen.add(target);
     if (typeof file.content !== "string" || (file.mode !== undefined && file.mode !== 0o600 && file.mode !== 0o700)) throw new Error("Invalid planned file");
+    if (file.encoding !== undefined && file.encoding !== "utf8" && file.encoding !== "latin1") throw new Error("Invalid planned file encoding");
   }
   if (p.credential) { keys(record(p.credential), ["ref", "envVar"], "credential"); envName(p.credential.ref, "credential.ref"); envName(p.credential.envVar, "credential.envVar"); if (p.process.env[p.credential.envVar] !== undefined) throw new Error("Credential value must not appear in a plan"); }
 }
