@@ -134,7 +134,7 @@ test('Cursor requires consistent initialization and terminal proof, and rejects 
 });
 
 async function fixture(t, auth = 'cursor-api-key') {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'runtime-cursor-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'runtime-cursor-')); t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const workspace = path.join(root, 'workspace');
   const windows = process.platform === 'win32';
   const executable = path.join(root, windows ? 'node.exe' : 'cursor-agent');
@@ -274,7 +274,7 @@ test('Cursor root .cursor checks include dangling links and do not read their ta
 
 async function windowsShimFixture(t) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cursor-shell-regression-')));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const home = path.join(root, 'isolated shell home'), shell = planCursorShell(home);
   for (const file of shell.files) {
     await mkdir(path.dirname(file.path), { recursive: true });
@@ -285,6 +285,9 @@ async function windowsShimFixture(t) {
 
 // Exercise the shipped EXE and the real Windows PowerShell parser, not a JS copy
 // of the quoting algorithm. Omitting -NoProfile here also verifies the shim adds it.
+// Load the test serializer from PSHOME: unqualified discovery scans all modules
+// installed on the runner and can stall before reaching the built-in Utility module.
+const loadWindowsTestJson = "Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1')";
 test('Windows Cursor shell preserves command arguments and disables profiles', { skip: process.platform !== 'win32' }, async t => {
   const f = await windowsShimFixture(t);
   const values = [
@@ -294,6 +297,7 @@ test('Windows Cursor shell preserves command arguments and disables profiles', {
   ];
   const literal = value => "'" + value.replaceAll("'", "''") + "'";
   const command = [
+    loadWindowsTestJson,
     '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
     `$values = @(${values.map(literal).join(', ')})`,
     "$result = @{ values = $values; digitsMatch = ('123' -match '^\\d+$'); arguments = [Environment]::GetCommandLineArgs() }",
@@ -302,21 +306,6 @@ test('Windows Cursor shell preserves command arguments and disables profiles', {
   for (const file of f.shell.files) {
     const result = await runProcess({ executable: file.path, args: ['-Command', command], cwd: f.root, stdin: '',
       env: { ...baseEnvironment(), ...f.shell.env, SystemRoot: process.env.SystemRoot } }, { timeoutMs: 15000 });
-    if (result.timedOut) {
-      const env = { ...baseEnvironment(), ...f.shell.env, SystemRoot: process.env.SystemRoot };
-      const modules = path.join(path.dirname(windowsShell), 'Modules');
-      const json = '[Console]::Out.Write((@{ value = "ok" } | ConvertTo-Json -Compress))';
-      for (const [label, extra, probe] of [
-        ['module-path', {}, '[Console]::Out.Write($env:PSModulePath)'],
-        ['windir', { WINDIR: process.env.SystemRoot }, json],
-        ['program-files', { ProgramFiles: process.env.ProgramFiles, WINDIR: process.env.SystemRoot }, json],
-        ['module-env', { PSModulePath: modules }, json],
-        ['explicit-import', {}, `Import-Module '${modules}/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'; ${json}`],
-      ]) {
-        const probeResult = await runProcess({ executable: windowsShell, args: ['-NoProfile', '-Command', probe], cwd: f.root, stdin: '', env: { ...env, ...extra } }, { timeoutMs: 5000 });
-        t.diagnostic(JSON.stringify({ label, probeResult }));
-      }
-    }
     assert.equal(result.exitCode, 0, JSON.stringify(result));
     const actual = JSON.parse(result.stdout);
     assert.deepEqual(actual.values, values);
@@ -329,6 +318,7 @@ test('Windows Cursor shell preserves command arguments and disables profiles', {
 test('Windows Cursor shell forwards standalone argv including empty and trailing-backslash arguments', { skip: process.platform !== 'win32' }, async t => {
   const f = await windowsShimFixture(t), script = path.join(f.root, 'inspect args.ps1');
   await writeFile(script, [
+    loadWindowsTestJson,
     '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
     '[Console]::Out.Write((@([Environment]::GetCommandLineArgs()) | ConvertTo-Json -Compress))',
     '',
@@ -357,6 +347,7 @@ test('Windows Cursor shell isolates host directories and removes credentials whi
   const f = await windowsShimFixture(t);
   const inheritedHome = path.join(f.root, 'host home'), inheritedAppData = path.join(inheritedHome, 'AppData');
   const command = [
+    loadWindowsTestJson,
     '$result = @{}',
     "foreach ($name in @('HOME','USERPROFILE','APPDATA','LOCALAPPDATA','HOMEDRIVE','HOMEPATH','HTTP_PROXY','https_proxy','CURSOR_API_KEY','CUSTOM_PROXY','NODE_OPTIONS','NODE_PATH','BASH_ENV','ENV')) { $result[$name] = [Environment]::GetEnvironmentVariable($name) }",
     '[Console]::Out.Write(($result | ConvertTo-Json -Compress))',
