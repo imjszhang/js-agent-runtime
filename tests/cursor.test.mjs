@@ -149,7 +149,7 @@ for (const dir of (process.env.PATH||'').split(path.delimiter)) { if (found) bre
 const tool=shell.toLowerCase().endsWith('.cmd')
   ? cp.spawnSync(process.execPath,[path.join(path.dirname(shell),'powershell-shim.js'),'-NoProfile','-Command',command],{encoding:'utf8'})
   : cp.spawnSync(shell,['-NoProfile','-Command',command],{encoding:'utf8'});
-if(!args.includes('--force'))assert.equal(tool.stdout,'unset|'+process.env.HOME, tool.stderr);
+if(!args.includes('--force'))assert.equal(tool.stdout,'unset|'+path.dirname(process.env.XDG_CONFIG_HOME), tool.stderr);
 else {assert.equal(args[args.indexOf('--sandbox')+1],'disabled');assert.equal(args.includes('--allowed-tools'),false);assert.equal(String(process.env.SHELL).toLowerCase().endsWith('powershell.exe'),true);assert.equal(tool.stdout,process.env.CURSOR_API_KEY+'|'+process.env.HOME, tool.stderr);}`
     : `const tool=cp.spawnSync('bash',['-c','printf "%s|%s|%s" "'+ '$' + '{CURSOR_API_KEY-unset}" "'+ '$' + '{NODE_OPTIONS-unset}" "'+ '$' + 'HOME"'],{encoding:'utf8'});
 if(!args.includes('--force'))assert.equal(tool.stdout,'unset|unset|'+process.env.XDG_CONFIG_HOME.replace(/\\/\\.config$/,''));
@@ -232,6 +232,19 @@ test('Cursor native login is checked before execution and incomplete login never
   assert.equal(JSON.stringify(r).includes('must-not-emit'), false);
 });
 
+test('Windows native login retains host authentication directories but isolates the tool shell', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t, 'cursor-login');
+  f.request.target.harness.useCurrentUserHomeForLogin = true;
+  const execution = plan(f.request);
+  assert.equal(execution.process.env.HOME, os.homedir());
+  assert.equal(execution.process.env.USERPROFILE, os.homedir());
+  assert.equal(execution.process.env.APPDATA, process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'));
+  const result = await run(execution, { ...f.options, resolveCredential: () => { throw new Error('native login must not resolve an API key'); } });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(await readFile(path.join(f.request.workspace, 'artifact.txt'), 'utf8'), f.request.prompt);
+  await assert.rejects(access(f.request.stateDir));
+});
+
 test('Cursor malformed streams, bad metadata and nonzero exits cannot produce success', async t => {
   for (const scenario of ['malformed', 'error', 'missing', 'workspace', 'nonzero']) {
     const f = await fixture(t), r = await run(plan(f.request), { ...f.options, env: { FAKE_SCENARIO: scenario } });
@@ -253,14 +266,97 @@ test('Cursor root .cursor checks include dangling links and do not read their ta
   await assert.rejects(assertCursorWorkspace(f.request.workspace), /\.cursor/);
 });
 
-test('Windows Cursor shell shim removes credentials and keeps standard proxies', { skip: process.platform !== 'win32' }, async t => {
-  const f = await fixture(t), shell = planCursorShell(path.join(f.root, 'shell home'));
-  for (const file of shell.files) { await mkdir(path.dirname(file.path), { recursive: true }); await writeFile(file.path, file.content, { encoding: file.encoding ?? "utf8", mode: file.mode }); }
-  const shim = shell.files.find(file => file.path.endsWith(`${path.sep}powershell.exe`)).path;
-  const command = "[Console]::Out.Write(($env:HTTP_PROXY)+'|'+$($env:https_proxy)+'|'+$(if($null -eq $env:CURSOR_API_KEY){'unset'}else{$env:CURSOR_API_KEY})+'|'+$(if($null -eq $env:CUSTOM_PROXY){'unset'}else{$env:CUSTOM_PROXY})+'|'+$env:HOME)";
-  const result = await runProcess({ executable: shim, args: ['-NoProfile', '-Command', command], cwd: f.root, stdin: '',
-    env: { ...shell.env, SystemRoot: process.env.SystemRoot, HTTP_PROXY: 'http://standard', https_proxy: 'http://lowercase', CURSOR_API_KEY: 'private', CUSTOM_PROXY: 'custom', NODE_OPTIONS: 'bad-option', HOME: path.join(f.root, 'shell home') } }, { timeoutMs: 15000 });
-  assert.equal(result.exitCode, 0, result.stderr); assert.equal(result.stdout, `http://standard|http://lowercase|unset|unset|${path.join(f.root, 'shell home')}`);
+async function windowsShimFixture(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'cursor-shell-regression-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const home = path.join(root, 'isolated shell home'), shell = planCursorShell(home);
+  for (const file of shell.files) {
+    await mkdir(path.dirname(file.path), { recursive: true });
+    await writeFile(file.path, file.content, { encoding: file.encoding ?? 'utf8', mode: file.mode });
+  }
+  return { root, home, shell };
+}
+
+// Exercise the shipped EXE and the real Windows PowerShell parser, not a JS copy
+// of the quoting algorithm. Omitting -NoProfile here also verifies the shim adds it.
+test('Windows Cursor shell preserves command arguments and disables profiles', { skip: process.platform !== 'win32' }, async t => {
+  const f = await windowsShimFixture(t);
+  const values = [
+    '', 'plain', 'C:\\work with spaces\\file.txt', 'C:\\work with spaces\\',
+    '\\\\server\\share with spaces\\', 'embedded "quotes"', 'slash before \\"quote"',
+    'many \\\\"quotes"', '中文 路径\\文件.txt', "apostrophe ' and double \"quotes\"",
+  ];
+  const literal = value => "'" + value.replaceAll("'", "''") + "'";
+  const command = [
+    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+    `$values = @(${values.map(literal).join(', ')})`,
+    "$result = @{ values = $values; digitsMatch = ('123' -match '^\\d+$'); arguments = [Environment]::GetCommandLineArgs() }",
+    '[Console]::Out.Write(($result | ConvertTo-Json -Compress -Depth 4))',
+  ].join('; ') + '; # quoted argument ends with a backslash \\';
+  for (const file of f.shell.files) {
+    const result = await runProcess({ executable: file.path, args: ['-Command', command], cwd: f.root, stdin: '',
+      env: { ...f.shell.env, SystemRoot: process.env.SystemRoot } }, { timeoutMs: 15000 });
+    assert.equal(result.exitCode, 0, result.stderr);
+    const actual = JSON.parse(result.stdout);
+    assert.deepEqual(actual.values, values);
+    assert.equal(actual.digitsMatch, true);
+    assert.equal(actual.arguments[1].toLowerCase(), '-noprofile');
+    assert.deepEqual(actual.arguments.slice(2), ['-Command', command]);
+  }
+});
+
+test('Windows Cursor shell forwards standalone argv including empty and trailing-backslash arguments', { skip: process.platform !== 'win32' }, async t => {
+  const f = await windowsShimFixture(t), script = path.join(f.root, 'inspect args.ps1');
+  await writeFile(script, [
+    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+    '[Console]::Out.Write((@([Environment]::GetCommandLineArgs()) | ConvertTo-Json -Compress))',
+    '',
+  ].join('\n'));
+  const values = [
+    '', 'plain', 'C:\\work\\file.txt', 'C:\\work\\', 'C:\\work with spaces\\file.txt',
+    '\\\\server\\share\\', '\\\\server\\share with spaces\\', 'embedded "quotes"',
+    'slash before \\"quote"', 'many \\\\"quotes"', '中文 路径\\文件.txt', 'C:\\final space\\',
+  ];
+  for (const file of f.shell.files) {
+    for (const flags of [[], ['-NoProfile']]) {
+      // Keep this temporary, unsigned test script independent of machine policy.
+      // The explicit -NoProfile case also covers callers that already pass it.
+      const args = [...flags, '-ExecutionPolicy', 'Bypass', '-File', script, ...values];
+      const result = await runProcess({ executable: file.path, args, cwd: f.root, stdin: '',
+        env: { ...f.shell.env, SystemRoot: process.env.SystemRoot } }, { timeoutMs: 15000 });
+      assert.equal(result.exitCode, 0, result.stderr);
+      const actual = JSON.parse(result.stdout);
+      assert.equal(actual[1].toLowerCase(), '-noprofile');
+      assert.deepEqual(actual.slice(2), args);
+    }
+  }
+});
+
+test('Windows Cursor shell isolates host directories and removes credentials while keeping proxies', { skip: process.platform !== 'win32' }, async t => {
+  const f = await windowsShimFixture(t);
+  const inheritedHome = path.join(f.root, 'host home'), inheritedAppData = path.join(inheritedHome, 'AppData');
+  const command = [
+    '$result = @{}',
+    "foreach ($name in @('HOME','USERPROFILE','APPDATA','LOCALAPPDATA','HOMEDRIVE','HOMEPATH','HTTP_PROXY','https_proxy','CURSOR_API_KEY','CUSTOM_PROXY','NODE_OPTIONS','NODE_PATH','BASH_ENV','ENV')) { $result[$name] = [Environment]::GetEnvironmentVariable($name) }",
+    '[Console]::Out.Write(($result | ConvertTo-Json -Compress))',
+  ].join('; ');
+  for (const file of f.shell.files) {
+    const result = await runProcess({ executable: file.path, args: ['-Command', command], cwd: f.root, stdin: '',
+      env: { ...f.shell.env, SystemRoot: process.env.SystemRoot,
+        HOME: inheritedHome, USERPROFILE: inheritedHome, APPDATA: path.join(inheritedAppData, 'Roaming'), LOCALAPPDATA: path.join(inheritedAppData, 'Local'),
+        HOMEDRIVE: 'Z:', HOMEPATH: '\\host-profile', HTTP_PROXY: 'http://standard', https_proxy: 'http://lowercase',
+        CURSOR_API_KEY: 'private', CUSTOM_PROXY: 'custom', NODE_OPTIONS: 'bad-option', NODE_PATH: 'host-modules', BASH_ENV: 'host-startup', ENV: 'host-env' },
+    }, { timeoutMs: 15000 });
+    assert.equal(result.exitCode, 0, result.stderr);
+    const actual = JSON.parse(result.stdout), root = path.parse(f.home).root;
+    assert.equal(actual.HOME, f.home); assert.equal(actual.USERPROFILE, f.home);
+    assert.equal(actual.APPDATA, path.join(f.home, 'AppData', 'Roaming'));
+    assert.equal(actual.LOCALAPPDATA, path.join(f.home, 'AppData', 'Local'));
+    assert.equal(actual.HOMEDRIVE, root.replace(/[\\/]+$/, ''));
+    assert.equal(actual.HOMEPATH, path.sep + path.relative(root, f.home));
+    assert.equal(actual.HTTP_PROXY, 'http://standard'); assert.equal(actual.https_proxy, 'http://lowercase');
+    for (const name of ['CURSOR_API_KEY', 'CUSTOM_PROXY', 'NODE_OPTIONS', 'NODE_PATH', 'BASH_ENV', 'ENV']) assert.equal(actual[name], null, name);
+  }
 });
 
 test('Cursor shell preserves standard proxies, skips rc files and removes credentials', { skip: posixSkip }, async t => {
