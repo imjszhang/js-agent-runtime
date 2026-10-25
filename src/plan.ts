@@ -5,7 +5,7 @@ import { hashObject } from "./snapshot.js";
 import { absolute, envName, keys, name, nativeExecutable, overlaps, record, text, validateRequest } from "./validation.js";
 import type { Adapter, AdapterPlan, ExecutionPlan, RunRequest } from "./types.js";
 
-export const RUNTIME_VERSION = "0.2.1";
+export const RUNTIME_VERSION = "0.2.2";
 const adapters = new Map(builtInAdapters.map(a => [a.id, a]));
 export function registerAdapter(adapter: Adapter): () => void {
   name(adapter.id, "adapter.id"); text(adapter.version, "adapter.version");
