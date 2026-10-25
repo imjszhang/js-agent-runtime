@@ -178,7 +178,7 @@ if(mode==='hang')setInterval(()=>{},1000);else{
 test('Cursor executes through native launcher, scrubs tool credentials and persists only redacted output', async t => {
   const f = await fixture(t), events = [];
   const r = await run(plan(f.request), { ...f.options, onEvent: event => { events.push(event); } });
-  assert.equal(r.status, 'completed', r.error); assert.equal(r.usage, null); assert.equal(r.cost, null);
+  assert.equal(r.status, 'completed', `${r.error}\n${await readFile(path.join(f.options.runDir, 'stderr.log'), 'utf8')}`); assert.equal(r.usage, null); assert.equal(r.cost, null);
   assert.equal(await readFile(path.join(f.request.workspace, 'artifact.txt'), 'utf8'), f.request.prompt);
   const logs = await Promise.all((await readdir(f.options.runDir)).map(file => readFile(path.join(f.options.runDir, file), 'utf8')));
   assert.equal(logs.join('\n').includes(secret), false); assert.equal(JSON.stringify(events).includes(secret), false);
@@ -240,7 +240,7 @@ test('Windows native login retains host authentication directories but isolates 
   assert.equal(execution.process.env.USERPROFILE, os.homedir());
   assert.equal(execution.process.env.APPDATA, process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'));
   const result = await run(execution, { ...f.options, resolveCredential: () => { throw new Error('native login must not resolve an API key'); } });
-  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.status, 'completed', `${result.error}\n${await readFile(path.join(f.options.runDir, 'stderr.log'), 'utf8')}`);
   assert.equal(await readFile(path.join(f.request.workspace, 'artifact.txt'), 'utf8'), f.request.prompt);
   await assert.rejects(access(f.request.stateDir));
 });
@@ -296,7 +296,7 @@ test('Windows Cursor shell preserves command arguments and disables profiles', {
   for (const file of f.shell.files) {
     const result = await runProcess({ executable: file.path, args: ['-Command', command], cwd: f.root, stdin: '',
       env: { ...f.shell.env, SystemRoot: process.env.SystemRoot } }, { timeoutMs: 15000 });
-    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(result.exitCode, 0, JSON.stringify(result));
     const actual = JSON.parse(result.stdout);
     assert.deepEqual(actual.values, values);
     assert.equal(actual.digitsMatch, true);
@@ -324,7 +324,7 @@ test('Windows Cursor shell forwards standalone argv including empty and trailing
       const args = [...flags, '-ExecutionPolicy', 'Bypass', '-File', script, ...values];
       const result = await runProcess({ executable: file.path, args, cwd: f.root, stdin: '',
         env: { ...f.shell.env, SystemRoot: process.env.SystemRoot } }, { timeoutMs: 15000 });
-      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(result.exitCode, 0, JSON.stringify(result));
       const actual = JSON.parse(result.stdout);
       assert.equal(actual[1].toLowerCase(), '-noprofile');
       assert.deepEqual(actual.slice(2), args);
@@ -347,7 +347,7 @@ test('Windows Cursor shell isolates host directories and removes credentials whi
         HOMEDRIVE: 'Z:', HOMEPATH: '\\host-profile', HTTP_PROXY: 'http://standard', https_proxy: 'http://lowercase',
         CURSOR_API_KEY: 'private', CUSTOM_PROXY: 'custom', NODE_OPTIONS: 'bad-option', NODE_PATH: 'host-modules', BASH_ENV: 'host-startup', ENV: 'host-env' },
     }, { timeoutMs: 15000 });
-    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(result.exitCode, 0, JSON.stringify(result));
     const actual = JSON.parse(result.stdout), root = path.parse(f.home).root;
     assert.equal(actual.HOME, f.home); assert.equal(actual.USERPROFILE, f.home);
     assert.equal(actual.APPDATA, path.join(f.home, 'AppData', 'Roaming'));
