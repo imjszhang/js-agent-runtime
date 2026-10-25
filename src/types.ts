@@ -24,7 +24,7 @@ export type RunRequest = {
   runId: string; workspace: string; prompt: string; target: Target; timeoutMs: number;
   maxOutputBytes?: number; terminationGraceMs?: number; stateDir?: string;
 };
-export type PlannedFile = { path: string; content: string; mode?: 0o600 | 0o700 };
+export type PlannedFile = { path: string; content: string; mode?: 0o600 | 0o700; encoding?: "utf8" | "latin1" };
 export type ProcessPlan = { executable: string; args: string[]; cwd: string; stdin: string; env: Record<string, string> };
 export type AdapterPlan = {
   process: ProcessPlan; files: PlannedFile[];

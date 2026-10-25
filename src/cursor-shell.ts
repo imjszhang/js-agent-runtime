@@ -1,8 +1,9 @@
 import path from "node:path";
+import { CURSOR_SHELL_WIN_EXE } from "./cursor-shell-win-exe.js";
 
 type CursorShellPlan = {
   env: Record<string, string>;
-  files: Array<{ path: string; content: string; mode?: 0o600 | 0o700 }>;
+  files: Array<{ path: string; content: string; mode?: 0o600 | 0o700; encoding?: "utf8" | "latin1" }>;
 };
 
 function shellQuote(value: string): string {
@@ -24,10 +25,24 @@ function shellQuote(value: string): string {
  * the plan; recreate the plan after changing PATH. Tool binaries remain live
  * host inputs and are not frozen by the plan hash.
  */
+function windowsShell(isolatedHome: string): CursorShellPlan {
+  const bin = path.join(isolatedHome, "cursor-shell", "bin");
+  const inheritedPath = process.env.PATH ?? "";
+  if (/[\u0000\r\n]/u.test(inheritedPath)) throw new Error("Cursor Agent PATH 包含无效字符");
+  const exe = CURSOR_SHELL_WIN_EXE.toString("latin1");
+  return {
+    env: { PATH: inheritedPath === "" ? bin : `${bin}${path.delimiter}${inheritedPath}` },
+    files: [
+      { path: path.join(bin, "powershell.exe"), content: exe, mode: 0o700, encoding: "latin1" },
+      { path: path.join(bin, "pwsh.exe"), content: exe, mode: 0o700, encoding: "latin1" },
+    ],
+  };
+}
+
 export function planCursorShell(home: string): CursorShellPlan {
   if (!path.isAbsolute(home) || /[\u0000-\u001f\u007f]/u.test(home)) throw new Error("Cursor Agent 临时 HOME 必须是绝对路径");
-  if (process.platform === "win32") throw new Error("Cursor Agent shell 隔离当前仅支持 POSIX 平台");
   const isolatedHome = path.resolve(home);
+  if (process.platform === "win32") return windowsShell(isolatedHome);
   const bin = path.join(isolatedHome, "cursor-shell", "bin");
   const inheritedPath = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
   if (/[\u0000\r\n]/u.test(inheritedPath)) throw new Error("Cursor Agent PATH 包含无效字符");

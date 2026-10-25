@@ -125,7 +125,7 @@ export async function run(input: ExecutionPlan, options: RunOptions = {}): Promi
         writeFileSync(path.join(logDir, "plan.json"), JSON.stringify(redactor.value(execution), null, 2) + "\n", { mode: 0o600, flag: "wx" });
         for (const file of ["stdout.log", "stderr.log", "events.jsonl"]) writeFileSync(path.join(logDir, file), "", { mode: 0o600, flag: "wx" });
       }
-      for (const file of execution.files) { await mkdir(path.dirname(file.path), { recursive: true, mode: 0o700 }); await writeFile(file.path, file.content, { mode: file.mode ?? 0o600, flag: "wx" }); }
+      for (const file of execution.files) { await mkdir(path.dirname(file.path), { recursive: true, mode: 0o700 }); await writeFile(file.path, file.content, { encoding: file.encoding ?? "utf8", mode: file.mode ?? 0o600, flag: "wx" }); }
       emit("started", { adapter: execution.adapter, target: request.target.name });
       const remaining = request.timeoutMs - (Date.now() - started);
       if (remaining <= 0) { result.status = "timed_out"; result.error = "Task deadline exceeded before process start"; }

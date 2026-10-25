@@ -1,5 +1,12 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import type { EventType, OutputParser, RunRequest } from "./types.js";
+
+function sameDirectory(reported: string, requested: string): boolean {
+  const left = path.resolve(reported), right = path.resolve(requested);
+  if (left === right) return true;
+  try { return realpathSync.native(left) === realpathSync.native(right); } catch { return false; }
+}
 
 function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -20,7 +27,7 @@ export function createCursorParser(request?: RunRequest): OutputParser {
         if (initialized || !nonempty(event.session_id)) error ??= "Cursor Agent emitted invalid or duplicate session initialization";
         else { initialized = true; sessionId = event.session_id; }
         if (request) {
-          if (typeof event.cwd !== "string" || !path.isAbsolute(event.cwd) || path.resolve(event.cwd) !== request.workspace) error ??= "Cursor Agent workspace did not match the requested run";
+          if (typeof event.cwd !== "string" || !path.isAbsolute(event.cwd) || !sameDirectory(event.cwd, request.workspace)) error ??= "Cursor Agent workspace did not match the requested run";
           if (event.apiKeySource !== (request.target.backend.auth === "cursor-login" ? "login" : "env")) error ??= "Cursor Agent authentication source did not match the target";
         }
       }
