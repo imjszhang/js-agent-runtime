@@ -51,6 +51,8 @@ internal static class CursorShellShim {
   }
 
   private static string QuoteOne(string arg) {
+    if (arg.Length == 0) return "\"\"";
+    if (arg.IndexOfAny(new[] { ' ', '\t', '\n', '\v', '"' }) < 0) return arg;
     // Windows argv parsing only treats backslashes specially before a quote.
     // Preserve ordinary slashes; double trailing ones before our closing quote.
     var quoted = new StringBuilder("\"");

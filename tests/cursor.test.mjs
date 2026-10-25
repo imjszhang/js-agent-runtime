@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, access, rm, symlink, link } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, access, rm, symlink, link, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { plan, run, probe, runProcess } from '../dist/index.js';
+import { baseEnvironment } from '../dist/process.js';
 import { createCursorParser } from '../dist/cursor-parser.js';
 import { CURSOR_AGENT_VERSION, CURSOR_AGENT_VERSIONS, assertCursorAgentVersion, cursorEnvironment, cursorVersionProcess, cursorLoginProcess, parseCursorAccountStatus, assertCursorWorkspace } from '../dist/cursor.js';
 import { planCursorShell } from '../dist/cursor-shell.js';
@@ -149,7 +150,12 @@ for (const dir of (process.env.PATH||'').split(path.delimiter)) { if (found) bre
 const tool=shell.toLowerCase().endsWith('.cmd')
   ? cp.spawnSync(process.execPath,[path.join(path.dirname(shell),'powershell-shim.js'),'-NoProfile','-Command',command],{encoding:'utf8'})
   : cp.spawnSync(shell,['-NoProfile','-Command',command],{encoding:'utf8'});
-if(!args.includes('--force'))assert.equal(tool.stdout,'unset|'+path.dirname(process.env.XDG_CONFIG_HOME), tool.stderr);
+if(!args.includes('--force')) {
+  assert.equal(tool.status,0,tool.stderr);
+  const [credential,toolHome,...extra]=tool.stdout.split('|');
+  assert.equal(credential,'unset',tool.stderr);assert.deepEqual(extra,[]);
+  assert.equal(fs.realpathSync.native(toolHome),fs.realpathSync.native(path.dirname(process.env.XDG_CONFIG_HOME)));
+}
 else {assert.equal(args[args.indexOf('--sandbox')+1],'disabled');assert.equal(args.includes('--allowed-tools'),false);assert.equal(String(process.env.SHELL).toLowerCase().endsWith('powershell.exe'),true);assert.equal(tool.stdout,process.env.CURSOR_API_KEY+'|'+process.env.HOME, tool.stderr);}`
     : `const tool=cp.spawnSync('bash',['-c','printf "%s|%s|%s" "'+ '$' + '{CURSOR_API_KEY-unset}" "'+ '$' + '{NODE_OPTIONS-unset}" "'+ '$' + 'HOME"'],{encoding:'utf8'});
 if(!args.includes('--force'))assert.equal(tool.stdout,'unset|unset|'+process.env.XDG_CONFIG_HOME.replace(/\\/\\.config$/,''));
@@ -267,7 +273,7 @@ test('Cursor root .cursor checks include dangling links and do not read their ta
 });
 
 async function windowsShimFixture(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'cursor-shell-regression-'));
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cursor-shell-regression-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const home = path.join(root, 'isolated shell home'), shell = planCursorShell(home);
   for (const file of shell.files) {
@@ -295,7 +301,7 @@ test('Windows Cursor shell preserves command arguments and disables profiles', {
   ].join('; ') + '; # quoted argument ends with a backslash \\';
   for (const file of f.shell.files) {
     const result = await runProcess({ executable: file.path, args: ['-Command', command], cwd: f.root, stdin: '',
-      env: { ...f.shell.env, SystemRoot: process.env.SystemRoot } }, { timeoutMs: 15000 });
+      env: { ...baseEnvironment(), ...f.shell.env, SystemRoot: process.env.SystemRoot } }, { timeoutMs: 15000 });
     assert.equal(result.exitCode, 0, JSON.stringify(result));
     const actual = JSON.parse(result.stdout);
     assert.deepEqual(actual.values, values);
@@ -323,7 +329,7 @@ test('Windows Cursor shell forwards standalone argv including empty and trailing
       // The explicit -NoProfile case also covers callers that already pass it.
       const args = [...flags, '-ExecutionPolicy', 'Bypass', '-File', script, ...values];
       const result = await runProcess({ executable: file.path, args, cwd: f.root, stdin: '',
-        env: { ...f.shell.env, SystemRoot: process.env.SystemRoot } }, { timeoutMs: 15000 });
+        env: { ...baseEnvironment(), ...f.shell.env, SystemRoot: process.env.SystemRoot } }, { timeoutMs: 15000 });
       assert.equal(result.exitCode, 0, JSON.stringify(result));
       const actual = JSON.parse(result.stdout);
       assert.equal(actual[1].toLowerCase(), '-noprofile');
@@ -342,7 +348,7 @@ test('Windows Cursor shell isolates host directories and removes credentials whi
   ].join('; ');
   for (const file of f.shell.files) {
     const result = await runProcess({ executable: file.path, args: ['-Command', command], cwd: f.root, stdin: '',
-      env: { ...f.shell.env, SystemRoot: process.env.SystemRoot,
+      env: { ...baseEnvironment(), ...f.shell.env, SystemRoot: process.env.SystemRoot,
         HOME: inheritedHome, USERPROFILE: inheritedHome, APPDATA: path.join(inheritedAppData, 'Roaming'), LOCALAPPDATA: path.join(inheritedAppData, 'Local'),
         HOMEDRIVE: 'Z:', HOMEPATH: '\\host-profile', HTTP_PROXY: 'http://standard', https_proxy: 'http://lowercase',
         CURSOR_API_KEY: 'private', CUSTOM_PROXY: 'custom', NODE_OPTIONS: 'bad-option', NODE_PATH: 'host-modules', BASH_ENV: 'host-startup', ENV: 'host-env' },
