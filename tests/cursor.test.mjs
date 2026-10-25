@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, readdir, access, rm, symlink, link
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import { plan, run, probe, runProcess } from '../dist/index.js';
 import { baseEnvironment } from '../dist/process.js';
@@ -302,6 +303,17 @@ test('Windows Cursor shell preserves command arguments and disables profiles', {
   for (const file of f.shell.files) {
     const result = await runProcess({ executable: file.path, args: ['-Command', command], cwd: f.root, stdin: '',
       env: { ...baseEnvironment(), ...f.shell.env, SystemRoot: process.env.SystemRoot } }, { timeoutMs: 15000 });
+    if (result.timedOut) {
+      const env = { ...baseEnvironment(), ...f.shell.env, SystemRoot: process.env.SystemRoot };
+      for (const executable of [windowsShell, file.path]) {
+        for (const command of ['[Console]::Out.Write("ok")', '[Console]::Out.Write((@{ value = "ok" } | ConvertTo-Json -Compress))']) {
+          const args = ['-NoProfile', '-Command', command];
+          const asyncResult = await runProcess({ executable, args, cwd: f.root, stdin: '', env }, { timeoutMs: 3000 });
+          const syncResult = spawnSync(executable, args, { cwd: f.root, env, input: '', encoding: 'utf8', windowsHide: true, timeout: 3000 });
+          t.diagnostic(JSON.stringify({ executable, command, asyncResult, syncResult: { status: syncResult.status, stdout: syncResult.stdout, stderr: syncResult.stderr, error: syncResult.error?.message } }));
+        }
+      }
+    }
     assert.equal(result.exitCode, 0, JSON.stringify(result));
     const actual = JSON.parse(result.stdout);
     assert.deepEqual(actual.values, values);
