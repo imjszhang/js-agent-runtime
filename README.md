@@ -1,8 +1,39 @@
 # js-agent-runtime
 
-Provider-aware execution of local agent CLIs. Node.js 20 or newer; macOS/Linux use process-group isolation, Windows uses process-tree termination with the limits described under [Windows](#windows). ESM JavaScript and TypeScript declarations are shipped. No production dependencies, model SDK, implicit `.env` loading, CLI installation, or automatic upgrades.
+English | [简体中文](README.zh-CN.md)
 
-The package owns execution, not benchmark scoring or deliverable workflows. Callers select and stage instructions, skills, sources and assets; collect artifacts; validate content; and manage review, versions and publication.
+**Run Codex, Claude Code, DeepSeek Harness, OpenCode V2 and Cursor Agent from JavaScript or TypeScript.**
+
+A Node.js library for running local AI coding agent CLIs through one `plan → probe → run` API. Choose an agent and its supported authentication mode, give it a workspace and a task, then consume structured events and a checked completion result.
+
+[npm](https://www.npmjs.com/package/js-agent-runtime) · [Quick start](#quick-start) · [Supported agents](#supported-agents) · [Platform support](#platform-support-and-validation) · [API reference](#api) · [Changelog](CHANGELOG.md)
+
+## Why use js-agent-runtime?
+
+Use it when your Node.js application needs to run an installed coding agent: a developer tool, a background task worker, a file-generation workflow, or a harness for comparing agent runs.
+
+- **One execution interface for five agents.** Integrate planning, readiness checks, streaming events and final results once. Each adapter handles its CLI's arguments and native output format.
+- **Explicit authentication and provider routing.** Use supported API endpoints or existing native logins. The runtime validates each adapter's protocol and authentication combinations before execution.
+- **Execution controls and records.** Set deadlines, cancel with `AbortSignal`, bound output and optionally save redacted plans, events and results.
+- **Completion checks beyond exit code zero.** Adapters require native terminal evidence. Missing usage or cost stays unknown rather than being invented.
+
+Node.js **20+** · **ESM** · **TypeScript declarations** · **Zero production dependencies** · **MIT**
+
+This is an execution library for existing agent CLIs. Install and authenticate the CLI separately. Your application owns orchestration, retries, artifact validation and publication; permission and sandbox capabilities depend on the selected CLI and platform.
+
+## Supported agents
+
+| Agent harness | `harness.adapter` | Authentication | Example configuration |
+|---|---|---|---|
+| **Codex CLI** | `codex` | API key with Responses; ChatGPT login | [API](examples/codex-api.json) · [Native login](examples/native-login.json) |
+| **Claude Code** | `claude-code` | API key with Anthropic Messages; Claude subscription; existing user configuration | [API](examples/claude-api.json) · [User configuration](examples/claude-config.json) |
+| **DeepSeek Harness (DSH)** | `deepseek-harness` | API key with Anthropic Messages | [API](examples/deepseek-api.json) |
+| **OpenCode V2** | `opencode` | API key with Chat Completions | [API](examples/opencode-api.json) |
+| **Cursor Agent** | `cursor-agent` | Cursor API key; macOS native login; Windows native login with explicit opt-in | [API](examples/cursor-api.json) · [Native login](examples/cursor-login.json) |
+
+Choose the adapter **and** its compatible backend. Switching the adapter name alone does not make authentication, model IDs or protocols interchangeable. Cursor uses its native service; OpenCode V1 is not supported. See [compatibility details](#built-in-compatibility) for requirements and CLI version constraints.
+
+Need another harness? Implement a trusted adapter with [`registerAdapter()`](#extensions-and-snapshots).
 
 ## Installation
 
@@ -10,21 +41,86 @@ The package owns execution, not benchmark scoring or deliverable workflows. Call
 npm install js-agent-runtime
 ```
 
-For a source checkout:
-
-```sh
-npm ci --ignore-scripts
-npm run build
-npm pack
-```
-
-Install the resulting `.tgz` from your consuming project. Install and authenticate the
-selected agent CLI separately. This package is an ESM library, not a CLI executable.
+Install and authenticate the selected agent CLI separately. This package is an ESM library; save examples as `.mjs` or use a project with `"type": "module"`. For repository setup, see [development](#development-and-distribution).
 
 Source: [GitHub](https://github.com/imjszhang/js-agent-runtime) ·
 [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Release guide](RELEASING.md)
 
+## Quick start
+
+This example runs **Codex CLI with an existing ChatGPT login**, using a fresh temporary workspace. It makes a real model call and asks the agent to create a file.
+
+Prerequisites: Node.js 20+, an installed and authenticated Codex CLI on PATH, and a model available to that account. The example defaults to `gpt-6.1-sol`, used in our recorded macOS smoke test; set `CODEX_MODEL` to select a different model. On Windows, the executable must be a native `.exe`; see [platform support](#platform-support-and-validation).
+
+Save as `run-agent.mjs`:
+
+```js
+import { randomUUID } from 'node:crypto';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { plan, probe, run } from 'js-agent-runtime';
+
+const workspace = await mkdtemp(join(tmpdir(), 'agent-demo-'));
+const execution = plan({
+  runId: randomUUID(),
+  workspace,
+  prompt: 'Create hello.txt containing "Hello from Codex" in this workspace.',
+  target: {
+    name: 'local-codex',
+    harness: {
+      adapter: 'codex',
+      executable: 'codex', // On Windows, use the installed native executable path.
+      permission: 'workspace-write',
+    },
+    backend: {
+      auth: 'chatgpt',
+      model: process.env.CODEX_MODEL ?? 'gpt-6.1-sol',
+    },
+  },
+  timeoutMs: 120_000,
+});
+
+const readiness = await probe(execution, {
+  checkExecutable: true,
+  checkLogin: true,
+});
+if (!readiness.ok) {
+  console.error(readiness.checks);
+  process.exit(1);
+}
+
+const result = await run(execution);
+console.log({ status: result.status, text: result.text, workspace });
+if (result.status !== 'completed') {
+  console.error(result.error);
+  process.exitCode = 1;
+}
+```
+
+```sh
+node run-agent.mjs
+```
+
+The generated file remains in the printed workspace. A `completed` result confirms the adapter's execution checks; inspect and validate the file for your application's requirements. Metadata probes alone do not verify remote service access.
+
+For API keys, custom endpoints, cancellation, event callbacks and persisted records, see the [API example](#api). For another agent, start with its configuration in the [supported agents table](#supported-agents).
+
+## Platform support and validation
+
+Support and real-service validation are separate. These are the recorded checks for **0.2.2**, not a guarantee for every CLI version, provider, model or permission mode.
+
+| Platform | Verified scope |
+|---|---|
+| **macOS** | One real `workspace-write` call through each of the five adapters, including file reads/writes and output verification. |
+| **Linux** | Automated tests and package checks on Node 20 / 22 / 24. No real-service run is recorded here. |
+| **Windows** | Automated tests and package checks on Node 22 / 24. One real Claude Code call using `claude-config` + `bypass`. Cursor native-launch integration uses a fake CLI; its shell tests execute real Windows PowerShell. |
+
+**Cursor Agent's real Windows service call remains unverified.** Windows requires native executables rather than `.cmd` / `.bat` launchers, and its process-tree termination has limits. `bypass` provides no filesystem containment. Read the [Windows details](#windows) and [live validation record](#live-smoke-checks) before choosing a deployment configuration.
+
 ## API
+
+The following example shows explicit API routing, cancellation, event handling and optional execution records. Replace the endpoint, model and absolute paths with your own; the workspace must already exist and the record directory must be new.
 
 ```js
 import { plan, probe, run } from 'js-agent-runtime';
@@ -85,13 +181,7 @@ Timeout/abort terminates the POSIX process group, allows a short grace period, t
 
 ## Built-in compatibility
 
-| Adapter | API auth | Native auth |
-|---|---|---|
-| `codex` | `protocol: responses` with explicit endpoint | `auth: chatgpt`, optional absolute `codexHome` and `credentialsStore: auto/file/keyring` |
-| `claude-code` | `protocol: anthropic-messages` with explicit endpoint | `auth: claude-subscription` or explicit `auth: claude-config`, optional absolute `claudeConfigDir` |
-| `deepseek-harness` | `protocol: anthropic-messages`, explicit endpoint and model | Not supported; API key only |
-| `opencode` | `protocol: chat-completions`, explicit endpoint and model | Not supported; API key only |
-| `cursor-agent` | `auth: cursor-api-key`, Cursor native key | `auth: cursor-login` (macOS Keychain, or Windows with `useCurrentUserHomeForLogin`) |
+The [agent overview](#supported-agents) lists supported authentication modes and examples. The sections below describe protocol, permission and version requirements.
 
 API backend fields: `auth`, `provider`, `model`, `protocol`, `baseURL`, `apiKeyEnv`; `reasoningEffort` supports Codex's existing values and Claude Code API values `low`, `high`, `max` (passed as `--effort`). It remains unsupported for Claude native modes, DeepSeek, OpenCode and Cursor. Native backends cannot include API provider fields. Claude's native default auth namespace preserves the real user HOME; explicitly setting `claudeConfigDir` selects that CLI namespace, including its Keychain behavior. Credentials remain owned by the native CLI. No code reads auth file contents. Authentication directory environment variables are not implicitly inherited; supply their backend fields explicitly. Claude subscription execution requires CLI 2.1.296 or newer and matching `claude.ai`/first-party login metadata. Its default namespace uses a protected macOS shell wrapper to block absolute user startup-file reads; other platforms require an explicitly selected `claudeConfigDir`. Claude subscription and ChatGPT costs remain `null`; native token-price estimates are not subscription bills.
 
@@ -107,7 +197,7 @@ const localTarget = {
 
 For `claude-code`, `permission: 'bypass'` is an explicit opt-in supported by `api-key` and `claude-config`; subscription targets still reject it. It maps to `--permission-mode bypassPermissions`, disables the shell sandbox and provides no filesystem containment. The workspace does not constrain the CLI's reads or writes. Fixed tools, disabled hooks, no session persistence and an empty strict MCP configuration still apply. Config mode and API bypass omit `--safe-mode`/`--restricted`; API authentication retains `--bare`. On the reviewed Claude Code version, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` resets bypass to default, so explicit bypass uses `0` and gives up that subprocess environment scrubbing. Bypass is never selected automatically. DeepSeek and Cursor have their own explicit bypass mappings below.
 
-For `claude-config`, `probe({checkLogin:true})` asks the CLI for authentication status and accepts its `loggedIn=true` verdict without requiring an OAuth/provider label. The result does not expose raw identity metadata or claim that the endpoint is Anthropic, that credentials work remotely, or that the selected model is compatible. Those require an actual execution. Claude adapter version 3 adds API effort/partial-message support, explicit API bypass and the subscription shell wrapper. Codex adapter version 3 adds credential-store selection and subscription proxy isolation. Regenerate previous execution plans before running them.
+For `claude-config`, `probe(plan, {checkLogin:true})` asks the CLI for authentication status and accepts its `loggedIn=true` verdict without requiring an OAuth/provider label. The result does not expose raw identity metadata or claim that the endpoint is Anthropic, that credentials work remotely, or that the selected model is compatible. Those require an actual execution. Claude adapter version 3 adds API effort/partial-message support, explicit API bypass and the subscription shell wrapper. Codex adapter version 3 adds credential-store selection and subscription proxy isolation. Regenerate previous execution plans before running them.
 
 Codex native login uses an internal Responses provider pinned to `https://chatgpt.com/backend-api/codex` with `requires_openai_auth=true`. It does not override `openai_base_url` or provide an API key. Probe and execution share this route definition. Codex adapter version 2 fixes the previous API-endpoint routing of native-login attempts; old execution plans must be regenerated and failed attempts remain unchanged.
 
@@ -127,21 +217,7 @@ On 2026-10-19, one real host integration run using Codex adapter version 2, Code
 
 `snapshotDirectory(root, { exclude?, maxFiles?, maxBytes? })` returns a deterministic file/hash/size/mode inventory. It refuses symlinks and special files and skips `.git`, `node_modules` and `.env*`. This is a generic local inventory, not artifact acceptance. `sha256`, `hashObject` and `stableStringify` support frozen input manifests.
 
-## Development and distribution
-
-```sh
-npm ci --ignore-scripts
-npm test
-npm run typecheck
-npm pack
-```
-
-On Windows, tests whose fake CLIs are shebang scripts are skipped with that reason (Windows cannot start them without a shell). Cursor execution tests hard-link the current Node binary and start the sibling `index.js`, the same entry the Windows adapter uses. `tests/process.test.mjs` covers timeout, cancellation, output limits, descendant cleanup and an end-to-end extension run on every platform by using the current Node executable directly.
-
-An optional `npm run test:sandbox` invokes the installed Codex sandbox in temporary fake repositories (API and native-login plans, read-only and workspace-write). It never requests a model or reads credentials. It is intentionally separate from the portable fake test suite.
-
-Portable tests cover strict validation, auth isolation, all five built-in routes using fake agents, terminal parsing, redaction, observer errors, output limits, timeout/cancel and child cleanup, extension registration, snapshots and metadata probes. New cases cover OpenCode export reconciliation, Cursor startup/permission/authentication checks, Claude partial output and unknown accounting, native preflight deadlines and subscription cost semantics. Config-mode regressions verify that planning performs no configuration reads, native settings remain unchanged, the configured model is inherited and its actual init value recorded, bypass arguments/scrub behavior are explicit, Codex and Claude subscription targets reject bypass, and native auth directories cannot overlap the workspace. Build produces `dist/*.js` and `dist/*.d.ts`; npm packages include only dist, schema, examples and documentation. Consumers should pin a package version or verified tarball; a local source link is for development only. No registry publication is performed by these commands.
-
+## Agent-specific configuration
 
 ### Native project context for Claude Code
 
@@ -189,7 +265,7 @@ Cursor captures the launch PATH when planning its shell wrapper; metadata and ex
 
 The Windows shim source is `src/cursor-shell-win.cs`; rebuild its embedded executable with `npm run build:cursor-shell:win` on Windows (.NET Framework compiler), or `npm run build:cursor-shell:win -- --docker` on macOS/Linux. The Docker build uses the official Mono image and mounts only a temporary source/output directory. Commit the generated `src/cursor-shell-win-exe.ts` together with source changes. `npm run check:cursor-shell` (also part of `npm run check`) verifies the normalized source hash and embedded binary hash; this detects a stale generated snapshot, not reproducible compilation. Windows tests execute the shipped shim through real PowerShell to verify arguments, disabled profiles and tool directory isolation. A live Windows Cursor provider call remains unverified.
 
-### Live smoke checks
+## Live smoke checks
 
 `npm run test:live -- --config /absolute/path/to/targets.json --output /absolute/path/to/new-check-directory` performs real model calls. Its config is `{ "targets": [/* Target objects */], "timeoutMs": 180000 }`; the output directory must be new and its parent must already exist. Supply installed executable paths, native login or the named API-key environment variables. The script does not load `.env` or install CLIs.
 
@@ -208,6 +284,21 @@ On 2026-10-24, all five built-in adapters passed one live `workspace-write` atte
 Cursor used `useHttp1ForAgent: true`, `useCurrentUserHomeForLogin: true` and `nativeStallTimeoutMs: 300000`. This result covers these selected local configurations; other authentication modes and models were not part of that live run.
 
 On 2026-10-24, one live attempt also passed on native Windows (10.0.26100 x64, Node.js 24.22.1): Claude Code `2.1.309` (native `claude.exe`), `claude-config` with the configured model (reported `claude-opus-5-5`) and `bypass` permission. Probes passed, the agent used Glob/Read/Write, the output file and unchanged input were verified, and it exited with code zero. No other adapter was tried on Windows.
+
+## Development and distribution
+
+```sh
+npm ci --ignore-scripts
+npm test
+npm run typecheck
+npm pack
+```
+
+On Windows, tests whose fake CLIs are shebang scripts are skipped with that reason (Windows cannot start them without a shell). Cursor execution tests hard-link the current Node binary and start the sibling `index.js`, the same entry the Windows adapter uses. `tests/process.test.mjs` covers timeout, cancellation, output limits, descendant cleanup and an end-to-end extension run on every platform by using the current Node executable directly.
+
+An optional `npm run test:sandbox` invokes the installed Codex sandbox in temporary fake repositories (API and native-login plans, read-only and workspace-write). It never requests a model or reads credentials. It is intentionally separate from the portable fake test suite.
+
+Portable tests cover strict validation, auth isolation, all five built-in routes using fake agents, terminal parsing, redaction, observer errors, output limits, timeout/cancel and child cleanup, extension registration, snapshots and metadata probes. New cases cover OpenCode export reconciliation, Cursor startup/permission/authentication checks, Claude partial output and unknown accounting, native preflight deadlines and subscription cost semantics. Config-mode regressions verify that planning performs no configuration reads, native settings remain unchanged, the configured model is inherited and its actual init value recorded, bypass arguments/scrub behavior are explicit, Codex and Claude subscription targets reject bypass, and native auth directories cannot overlap the workspace. Build produces `dist/*.js` and `dist/*.d.ts`; npm packages include only dist, schema, examples and documentation. Consumers should pin a package version or verified tarball; a local source link is for development only. No registry publication is performed by these commands.
 
 ## License
 
