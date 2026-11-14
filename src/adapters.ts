@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { createParser } from "./parsers.js";
 import { nativeCodexProviderConfig } from "./codex-native.js";
 import { planClaudeSubscriptionShell } from "./claude-shell.js";
+import { mcpBridgeArgs, mcpTokenEnv, planMcpShell } from "./mcp.js";
 import { deepseekAdapter } from "./deepseek.js";
 import { opencodeAdapter } from "./opencode.js";
 import { cursorAdapter } from "./cursor.js";
@@ -42,6 +43,12 @@ function codexPlan(request: RunRequest, stateDir: string): AdapterPlan {
     "model_providers.js_agent_runtime.wire_api": "responses", "model_providers.js_agent_runtime.requires_openai_auth": false,
   });
   if (b.reasoningEffort !== undefined) config.model_reasoning_effort = b.reasoningEffort;
+  for (const [index, server] of (request.mcpServers ?? []).entries()) {
+    const prefix = `mcp_servers.${server.name}`;
+    Object.assign(config, { [`${prefix}.url`]: server.url, [`${prefix}.bearer_token_env_var`]: mcpTokenEnv(index),
+      [`${prefix}.startup_timeout_sec`]: 30, [`${prefix}.tool_timeout_sec`]: 400,
+      ...(server.enabledTools !== undefined ? { [`${prefix}.enabled_tools`]: server.enabledTools } : {}) });
+  }
   const args = ["--no-daemon", "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", ...(subscription ? [] : ["--sandbox", request.target.harness.permission]), "--model", b.model];
   for (const [key, value] of Object.entries(config)) args.push("-c", `${key}=${JSON.stringify(value)}`);
   if (subscription) args.push("-c", `permissions.js_agent_runtime.filesystem={ ${JSON.stringify(authDir)} = "deny" }`);
@@ -57,19 +64,26 @@ function claudePlan(request: RunRequest, stateDir: string): AdapterPlan {
   if (native && (overlaps(authDir, request.workspace) || overlaps(authDir, stateDir))) throw new Error("Claude authentication directory must not overlap workspace or temporary state");
   const env: Record<string, string> = {
     ...environment(stateDir), GIT_CEILING_DIRECTORIES: request.workspace, DISABLE_AUTOUPDATER: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
-    // Claude 2.1.296 forces permissionMode=default when scrub=1, even with
-    // explicit allowedTools. An explicitly selected bypass must remain bypass.
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: bypass ? "0" : "1",
+    // Claude 2.1.296 forces permissionMode=default and suppresses explicit MCP
+    // when scrub=1. MCP uses the credential-scrubbing shell wrapper below.
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: bypass || request.mcpServers?.length ? "0" : "1",
     CLAUDE_CODE_TMPDIR: path.join(stateDir, "tmp"), CLAUDE_CODE_DEBUG_LOGS_DIR: path.join(stateDir, "claude-debug.log"),
     ...(configured ? {} : { ANTHROPIC_BASE_URL: b.auth === "api-key" ? b.baseURL.replace(/\/+$/u, "").replace(/\/v1$/u, "") : "https://api.anthropic.com" }),
   };
   // Explicitly setting the default directory changes native macOS Keychain identity.
   if (configured || (b.auth === "claude-subscription" && b.claudeConfigDir === undefined)) { env.HOME = homedir(); env.USERPROFILE = homedir(); }
   if (b.auth === "api-key" || b.claudeConfigDir !== undefined) env.CLAUDE_CONFIG_DIR = authDir;
-  const shell = b.auth === "claude-subscription" && b.claudeConfigDir === undefined
+  const nativeShell = b.auth === "claude-subscription" && b.claudeConfigDir === undefined
     ? planClaudeSubscriptionShell(authDir, stateDir) : { env: {}, files: [] };
+  const mcpShell = planMcpShell(request, stateDir, nativeShell.env.CLAUDE_CODE_SHELL);
+  const shell = { env: { ...nativeShell.env, ...mcpShell.env }, files: [...nativeShell.files, ...mcpShell.files] };
   Object.assign(env, shell.env);
   const tools = (request.target.harness.permission !== "read-only" ? "Read,Glob,Grep,Edit,Write,Bash" : "Read,Glob,Grep") + (projectContext ? ",Skill" : "");
+  const mcpServers = Object.fromEntries((request.mcpServers ?? []).map((server, index) => [server.name, {
+    type: "stdio", command: process.execPath, args: mcpBridgeArgs(server, index), env: { [mcpTokenEnv(index)]: `\${${mcpTokenEnv(index)}}`, NODE_USE_ENV_PROXY: "0" },
+  }]));
+  const allowedTools = [tools, ...(request.mcpServers ?? []).flatMap(server => server.enabledTools === undefined
+    ? [`mcp__${server.name}__*`] : server.enabledTools.map(tool => `mcp__${server.name}__${tool}`))].join(",");
   const settingsPath = path.join(stateDir, "settings.json");
   const protectedPaths = native ? [authDir, path.join(path.dirname(authDir), ".claude.json"), path.join(homedir(), "Library/Keychains")] : [];
   const settings = {
@@ -80,6 +94,7 @@ function claudePlan(request: RunRequest, stateDir: string): AdapterPlan {
       allowUnsandboxedCommands: false, excludedCommands: [],
       filesystem: { denyRead: protectedPaths, denyWrite: [...protectedPaths, settingsPath, ...(shell.files.length ? [path.join(stateDir, "claude-shell")] : [])] },
       credentials: { envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR",
+        ...(request.mcpServers ?? []).map((_, index) => mcpTokenEnv(index)),
         ...(b.auth === "claude-subscription" ? ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "all_proxy", "no_proxy"] : [])].map(name => ({ name, mode: "deny" })) },
     } } : {}),
   };
@@ -87,9 +102,9 @@ function claudePlan(request: RunRequest, stateDir: string): AdapterPlan {
     files: [{ path: settingsPath, content: JSON.stringify(settings, null, 2) + "\n", mode: 0o600 }, ...shell.files],
     process: { executable: request.target.harness.executable,
       args: ["-p", "--output-format", "stream-json", ...(b.auth === "api-key" ? ["--include-partial-messages"] : []), "--verbose", ...(native ? [] : ["--bare"]),
-        ...(configured || bypass ? [] : ["--safe-mode", "--restricted"]), ...(projectContext ? [] : ["--disable-slash-commands"]), "--no-chrome", "--no-session-persistence",
-        "--permission-mode", bypass ? "bypassPermissions" : "dontAsk", "--permission-prompts", "none", "--tools", tools, "--allowedTools", tools,
-        "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--settings", settingsPath, "--setting-sources", projectContext ? "user,project,local" : configured ? "user" : "",
+        ...(configured || bypass ? [] : [...(request.mcpServers?.length ? [] : ["--safe-mode"]), "--restricted"]), ...(projectContext ? [] : ["--disable-slash-commands"]), "--no-chrome", "--no-session-persistence",
+        "--permission-mode", bypass ? "bypassPermissions" : "dontAsk", "--permission-prompts", "none", "--tools", tools, "--allowedTools", allowedTools,
+        "--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers }), "--settings", settingsPath, "--setting-sources", projectContext ? "user,project,local" : configured ? "user" : "",
         ...(configured && b.model === "configured" ? [] : ["--model", b.model]),
         ...(b.auth === "api-key" && b.reasoningEffort !== undefined ? ["--effort", b.reasoningEffort] : [])],
       cwd: request.workspace, stdin: request.prompt, env },

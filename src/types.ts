@@ -20,15 +20,19 @@ export type Harness = {
   useHttp1ForAgent?: boolean; nativeStallTimeoutMs?: number; useCurrentUserHomeForLogin?: boolean;
 };
 export type Target = { name: string; harness: Harness; backend: Backend | ExtensionBackend };
+export type McpServer = { name: string; url: string; bearerTokenRef: string; enabledTools?: string[] };
 export type RunRequest = {
   runId: string; workspace: string; prompt: string; target: Target; timeoutMs: number;
   maxOutputBytes?: number; terminationGraceMs?: number; stateDir?: string;
+  /** Explicit HTTP servers only; never imports user or workspace MCP configuration. */
+  mcpServers?: McpServer[];
 };
 export type PlannedFile = { path: string; content: string; mode?: 0o600 | 0o700; encoding?: "utf8" | "latin1" };
 export type ProcessPlan = { executable: string; args: string[]; cwd: string; stdin: string; env: Record<string, string> };
 export type AdapterPlan = {
   process: ProcessPlan; files: PlannedFile[];
   credential?: { ref: string; envVar: string };
+  mcpCredentials?: Array<{ ref: string; envVar: string }>;
 };
 export type ExecutionPlan = AdapterPlan & {
   schemaVersion: 1; runtimeVersion: string; adapter: { id: string; version: string };

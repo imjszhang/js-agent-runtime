@@ -2,10 +2,11 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { builtInAdapters } from "./adapters.js";
 import { hashObject } from "./snapshot.js";
+import { mcpCredentials } from "./mcp.js";
 import { absolute, envName, keys, name, nativeExecutable, overlaps, record, text, validateRequest } from "./validation.js";
 import type { Adapter, AdapterPlan, ExecutionPlan, RunRequest } from "./types.js";
 
-export const RUNTIME_VERSION = "0.2.2";
+export const RUNTIME_VERSION = "0.2.3-mcp.1";
 const adapters = new Map(builtInAdapters.map(a => [a.id, a]));
 export function registerAdapter(adapter: Adapter): () => void {
   name(adapter.id, "adapter.id"); text(adapter.version, "adapter.version");
@@ -19,7 +20,7 @@ export function getAdapter(id: string): Adapter {
 }
 export function listAdapters(): Array<{ id: string; version: string }> { return [...adapters.values()].map(({ id, version }) => ({ id, version })); }
 function validateAdapterPlan(p: AdapterPlan, request: RunRequest, state: string): void {
-  const raw = record(p, "adapter plan"); keys(raw, ["process", "files", "credential"], "adapter plan");
+  const raw = record(p, "adapter plan"); keys(raw, ["process", "files", "credential", "mcpCredentials"], "adapter plan");
   const proc = record(p.process, "process"); keys(proc, ["executable", "args", "cwd", "stdin", "env"], "process");
   nativeExecutable(proc.executable, "process.executable");
   if (proc.cwd !== request.workspace || proc.stdin !== request.prompt) throw new Error("Adapter must retain the requested workspace and prompt");
@@ -35,7 +36,10 @@ function validateAdapterPlan(p: AdapterPlan, request: RunRequest, state: string)
     if (typeof file.content !== "string" || (file.mode !== undefined && file.mode !== 0o600 && file.mode !== 0o700)) throw new Error("Invalid planned file");
     if (file.encoding !== undefined && file.encoding !== "utf8" && file.encoding !== "latin1") throw new Error("Invalid planned file encoding");
   }
-  if (p.credential) { keys(record(p.credential), ["ref", "envVar"], "credential"); envName(p.credential.ref, "credential.ref"); envName(p.credential.envVar, "credential.envVar"); if (p.process.env[p.credential.envVar] !== undefined) throw new Error("Credential value must not appear in a plan"); }
+  for (const credential of [...(p.credential ? [p.credential] : []), ...(p.mcpCredentials ?? [])]) {
+    keys(record(credential), ["ref", "envVar"], "credential"); envName(credential.ref, "credential.ref"); envName(credential.envVar, "credential.envVar");
+    if (p.process.env[credential.envVar] !== undefined) throw new Error("Credential value must not appear in a plan");
+  }
 }
 /** Synchronous, serializable and side-effect free: does not inspect auth or disk. */
 export function plan(value: RunRequest): ExecutionPlan {
@@ -43,7 +47,7 @@ export function plan(value: RunRequest): ExecutionPlan {
   adapter.validate(request.target);
   const stateDir = request.stateDir ?? path.join(tmpdir(), "js-agent-runtime", `${request.runId}-${hashObject(request.workspace).slice(0, 12)}`);
   if (overlaps(stateDir, request.workspace)) throw new Error("stateDir must not overlap workspace");
-  const planned = adapter.plan(request, { stateDir });
+  const planned = { ...adapter.plan(request, { stateDir }), ...(request.mcpServers?.length ? { mcpCredentials: mcpCredentials(request) } : {}) };
   validateAdapterPlan(planned, request, stateDir);
   const body = { schemaVersion: 1 as const, runtimeVersion: RUNTIME_VERSION, adapter: { id: adapter.id, version: adapter.version }, request, stateDir, ...planned };
   return { ...body, planHash: hashObject(body) };

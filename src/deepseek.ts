@@ -1,6 +1,7 @@
 import path from "node:path";
 import { validateBackend } from "./validation.js";
 import { createDeepseekParser } from "./deepseek-parser.js";
+import { mcpBridgeArgs, mcpTokenEnv } from "./mcp.js";
 import type { Adapter, AdapterPlan, RunRequest } from "./types.js";
 
 /** DSH's native Messages route, with caller-owned provider and credential selection. */
@@ -34,12 +35,20 @@ function deepseekPlan(request: RunRequest, state: string): AdapterPlan {
     "tool-subagent", "tool-subagent-fork", "tool-subagent-control", "tool-subagent-list-agents", "tool-workflow", "workflow-ptc", "ptc-runtime",
   ]) patches.push({ id, disabled: true });
   if (request.target.harness.permission === "read-only") patches.push({ id: "tool-bash", disabled: true }, { id: "tool-pwsh", disabled: true });
+  const mcpEntries = (request.mcpServers ?? []).map((server, index) => {
+    const envName = mcpTokenEnv(index), marker = `__runtime_env_${index}__`;
+    const entry = { id: `runtime-mcp-${index}`, name: "@deepseek-ai/dsh-mcp-client", config: {
+      serverName: server.name, transport: "stdio", command: process.execPath, args: mcpBridgeArgs(server, index),
+      env: { [envName]: marker, NODE_USE_ENV_PROXY: "0" }, cwd: request.workspace, toolCallTimeoutMs: 400000, failOnStartupError: true, reconnect: { enabled: false },
+    } };
+    return `- ${JSON.stringify({ insert: [entry] }).replace(JSON.stringify(marker), `!!js ${JSON.stringify(`process.env.${envName}`)}`)}`;
+  });
   return {
     files: [
       { path: path.join(profile, "package.json"), content: JSON.stringify({ private: true, dependencies: {}, dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"] } } }, null, 2) + "\n" },
       { path: path.join(profile, "cordis.yml"), content: "[]\n" },
       { path: path.join(profile, "cordis.patch.yml"), content: "[]\n" },
-      { path: patchPath, content: JSON.stringify(patches, null, 2) + "\n" },
+      { path: patchPath, content: mcpEntries.length ? patches.map(entry => `- ${JSON.stringify(entry)}`).concat(mcpEntries).join("\n") + "\n" : JSON.stringify(patches, null, 2) + "\n" },
     ],
     process: {
       executable: request.target.harness.executable, args: ["--profile", "headless", "--patch", patchPath, "--json", "-"],

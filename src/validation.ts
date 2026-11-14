@@ -99,11 +99,32 @@ export function validateBackend(target: Target): Backend {
   return { ...raw, model } as Backend;
 }
 export function validateRequest(value: unknown): RunRequest {
-  const raw = record(value, "request"); keys(raw, ["runId", "workspace", "prompt", "target", "timeoutMs", "maxOutputBytes", "terminationGraceMs", "stateDir"], "request");
+  const raw = record(value, "request"); keys(raw, ["runId", "workspace", "prompt", "target", "timeoutMs", "maxOutputBytes", "terminationGraceMs", "stateDir", "mcpServers"], "request");
   if (typeof raw.prompt !== "string" || !raw.prompt.trim() || raw.prompt.includes("\0")) throw new Error("prompt must be non-empty text without NUL");
   const result: RunRequest = { runId: name(raw.runId, "runId"), workspace: absolute(raw.workspace, "workspace"), prompt: raw.prompt, target: validateTarget(raw.target), timeoutMs: integer(raw.timeoutMs, "timeoutMs", 1, 2_147_483_647) };
   if (raw.maxOutputBytes !== undefined) result.maxOutputBytes = integer(raw.maxOutputBytes, "maxOutputBytes", 1024, 134_217_728);
   if (raw.terminationGraceMs !== undefined) result.terminationGraceMs = integer(raw.terminationGraceMs, "terminationGraceMs", 0, 30_000);
   if (raw.stateDir !== undefined) result.stateDir = absolute(raw.stateDir, "stateDir");
+  if (raw.mcpServers !== undefined) {
+    if (!Array.isArray(raw.mcpServers) || raw.mcpServers.length > 16) throw new Error("mcpServers must be an array of at most 16 explicit HTTP servers");
+    if (raw.mcpServers.length && !["codex", "claude-code", "deepseek-harness"].includes(result.target.harness.adapter)) throw new Error("Explicit MCP servers require Codex, Claude Code or DeepSeek Harness");
+    const names = new Set<string>();
+    result.mcpServers = raw.mcpServers.map(value => {
+      const server = record(value, "MCP server"); keys(server, ["name", "url", "bearerTokenRef", "enabledTools"], "MCP server");
+      if (typeof server.name !== "string" || !/^[A-Za-z0-9_-]{1,32}$/u.test(server.name) || names.has(server.name)) throw new Error("MCP server names must be unique identifiers of 1–32 letters, digits, underscores or hyphens");
+      names.add(server.name);
+      let url: URL;
+      try {
+        if (typeof server.url !== "string" || /[\s\\]/u.test(server.url)) throw new Error();
+        url = new URL(server.url);
+        if (!["http:", "https:"].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) throw new Error();
+      } catch { throw new Error("MCP url must be HTTP(S) without credentials, query or fragment"); }
+      const bearerTokenRef = envName(server.bearerTokenRef, "MCP bearerTokenRef");
+      if (server.enabledTools !== undefined && (!Array.isArray(server.enabledTools) || server.enabledTools.length > 256
+        || server.enabledTools.some(tool => typeof tool !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(tool))
+        || new Set(server.enabledTools).size !== server.enabledTools.length)) throw new Error("MCP enabledTools must be a unique array of literal tool names");
+      return { name: server.name, url: url.href, bearerTokenRef, ...(server.enabledTools === undefined ? {} : { enabledTools: [...server.enabledTools as string[]] }) };
+    });
+  }
   return result;
 }

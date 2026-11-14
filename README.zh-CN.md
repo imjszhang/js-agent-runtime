@@ -169,6 +169,31 @@ const result = await run(execution, {
 
 超时或取消会终止 POSIX 进程组，等待短暂宽限期后强制结束剩余后代进程。主动脱离进程组的子进程无法由此机制约束。父进程退出处理器也会终止活动进程组。本库不会自动重试、回退服务商、提升权限、恢复原生会话或发布产物。
 
+### 显式 MCP 服务（0.2.3-mcp.1 预览版）
+
+Codex、Claude Code 和 DeepSeek Harness 支持为每次运行显式提供 HTTP MCP 服务清单；其他适配器拒绝非空清单。省略或传入 `[]` 保持既有隔离，不会读取全局或项目 MCP 注册文件。
+
+```js
+const execution = plan({
+  ...request,
+  mcpServers: [{
+    name: 'comfy-hub',
+    url: 'http://hub.lan:8899/mcp/comfyui',
+    bearerTokenRef: 'PROJECT_HUB_TOKEN',
+    enabledTools: ['server_info', 'list_assets'],
+  }],
+});
+const result = await run(execution, { resolveCredential: ref => credentials[ref] });
+```
+
+`bearerTokenRef` 与模型凭据使用同一调用方解析器。`plan()`、`probe()` 不解析凭据，也不连接 MCP；计划仅记录 `mcpCredentials: [{ref, envVar}]`。`run()` 才解析 token、加入脱敏器，并通过 `JS_AGENT_RUNTIME_MCP_TOKEN_<index>` 交给原生 CLI。命令参数和生成的配置文件只含环境变量引用，不含 token；调用方仍需把凭据源放在模型无法读取的位置。每个显式 MCP 端点的主机名会加入本次子进程的 `NO_PROXY` 和 `no_proxy`，保留已有排除项，不改变全局代理设置。
+
+`enabledTools` 是上游原始工具名称的精确清单；省略表示该显式服务的全部工具，`[]` 表示不启用任何工具。文件权限不会推断 MCP 权限，只读应用必须提供只读工具清单。URL 禁止内嵌凭据、查询参数和片段。Codex 使用原生 Streamable HTTP 与 `enabled_tools`；Claude 和 DSH 通过各自原生 MCP 客户端启动本库的 stdio 权限桥，再连接唯一配置的 HTTP 端点。桥同时过滤工具发现和拒绝未允许／不存在的调用，支持 JSON/SSE、会话清理与取消；首版不支持资源、提示模板或服务端主动调用客户端。原生 CLI 可能规范化服务名称中的标点。
+
+Claude 保留严格 MCP 配置和既有文件权限，只在显式启用 MCP 时移除 `--safe-mode`。已审查 CLI 的子进程 scrub 开关也会屏蔽显式 MCP，因此启用 MCP 时将其设为 `0`，改由 POSIX Bash 包装程序移除模型／MCP token 和其他凭据类变量；Windows 暂无等价隔离，规划时拒绝 Claude MCP。DSH 原生子进程环境清理会移除 shell 的凭据类变量，MCP 配置只向桥显式传入对应 token。这些措施防止常规 shell 环境继承；bypass 不构成抵御同用户任意进程检查的操作系统边界。原生工具超时为 400 秒、桥 HTTP 超时为 390 秒，仍受本次运行总期限约束。临时配置随运行状态清理。运行库检测到自身 DSH MCP 条目的未激活诊断后会终止并判定失败；仅 CLI 元数据探测通过不等于 MCP 已连接。
+
+此预览版以固定本地 tarball 交付，尚未发布到 npm。
+
 ### Windows
 
 `run()` 和带元数据检查的 `probe()` 也支持原生 Windows。Windows 的控制台子进程没有进程组，因此进程约束弱于 POSIX：
@@ -195,7 +220,7 @@ const localTarget = {
 };
 ```
 
-对于 `claude-code`，`permission: 'bypass'` 是显式启用项，支持 `api-key` 和 `claude-config`，订阅目标仍会拒绝。它映射为 `--permission-mode bypassPermissions`，关闭 shell 沙箱，不提供文件系统隔离；工作区不会限制 CLI 的读写范围。固定工具集合、禁用 hooks、不持久化会话以及空的严格 MCP 配置仍生效。配置模式和 API bypass 模式省略 `--safe-mode`／`--restricted`，API 认证仍保留 `--bare`。在已审查的 Claude Code 版本中，`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` 会将 bypass 重置为默认模式，因此显式 bypass 使用 `0`，放弃该子进程环境清理。运行时不会自动选择 bypass。DeepSeek 和 Cursor 的显式 bypass 映射见下文。
+对于 `claude-code`，`permission: 'bypass'` 是显式启用项，支持 `api-key` 和 `claude-config`，订阅目标仍会拒绝。它映射为 `--permission-mode bypassPermissions`，关闭 shell 沙箱，不提供文件系统隔离；工作区不会限制 CLI 的读写范围。固定工具集合、禁用 hooks、不持久化会话以及严格 MCP 配置（未显式提供时为空）仍生效。配置模式和 API bypass 模式省略 `--safe-mode`／`--restricted`，API 认证仍保留 `--bare`。在已审查的 Claude Code 版本中，`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` 会将 bypass 重置为默认模式，因此显式 bypass 使用 `0`，放弃该子进程环境清理。运行时不会自动选择 bypass。DeepSeek 和 Cursor 的显式 bypass 映射见下文。
 
 对于 `claude-config`，`probe(plan, {checkLogin:true})` 会询问 CLI 的认证状态，接受 `loggedIn=true` 的判断，不要求 OAuth／服务商标签。结果不会暴露原始身份信息，也不表明端点一定是 Anthropic、凭据可用于远程服务或所选模型兼容；这些都需要真实执行验证。Claude 适配器版本 3 增加 API effort／部分消息支持、显式 API bypass 和订阅 shell 包装程序。Codex 适配器版本 3 增加凭据存储选择和订阅代理隔离。执行旧计划前应重新生成计划。
 
@@ -205,7 +230,7 @@ Codex 原生登录使用固定指向 `https://chatgpt.com/backend-api/codex` 的
 
 适配器使用 CLI 提供的沙箱／权限控制，本包不实现操作系统容器。只读配置会在适用时移除写入／shell 工具；工作区写入配置保留原生沙箱，并拒绝交互式提权。Codex 禁止向祖先目录推断项目根目录，并将 Git 向上查找的边界设为指定工作区。Claude 的非 bypass API／订阅配置使用 restricted 模式，将文件工具限制在工作目录内；所配置的 shell 沙箱不可用时会拒绝执行。Claude 显式配置／bypass 的例外见上文。
 
-默认禁用项目／用户自定义、自动技能发现和无关集成。显式 `claude-config` 会加载用户设置，但任务期间仍禁用 hooks 和 MCP 集成。生产环境调用方必须将获准使用的指令及技能材料放入明确的提示词／工作区。本包不会解释某个项目专有的技能目录，也不会启用任意 MCP 服务。Cursor 的原生上下文及远程扩展限制见下文。
+默认禁用项目／用户自定义、自动技能发现和无关集成。显式 `claude-config` 会加载用户设置，但任务期间仍禁用 hooks，MCP 仅允许显式提供的服务。生产环境调用方必须将获准使用的指令及技能材料放入明确的提示词／工作区。本包不会解释某个项目专有的技能目录，也不会启用任意 MCP 服务。Cursor 的原生上下文及远程扩展限制见下文。
 
 CLI 元数据已针对 Codex `0.163.0-alpha.10.2` 和 Claude Code `2.1.296` 检查。命令行参数与原生事件格式对版本敏感；更换 CLI 版本后，应运行探测和受控冒烟测试。测试套件使用模拟 CLI，通过模拟测试并不代表真实服务连接成功或内容已完成。另有一次不调用模型的 Codex 沙箱检查，验证了嵌套临时工作区可以写入自身，但无法写入祖先仓库。
 
@@ -223,7 +248,7 @@ CLI 元数据已针对 Codex `0.163.0-alpha.10.2` 和 Claude Code `2.1.296` 检�
 
 结合 `auth: 'claude-config'` 设置 `harness.contextMode: 'project'`，并将真实项目根目录作为 `RunRequest.workspace` 传入。默认模式（`snapshot` 或省略）保留原有的受限技能发现行为。项目模式启用原生 `Skill` 工具，移除 `--disable-slash-commands`，并使用 `--setting-sources user,project,local`。Claude 从指定工作目录发现 `.claude/skills` 及其原生指令，按需读取其他项目文件，并不会把整个仓库直接放入提示词。原生内置／用户插件技能也可能可用；该选项并不是只允许项目技能的白名单。
 
-权限选择独立生效：`bypass` 仍映射为 `bypassPermissions`，不提供文件系统隔离。Hooks 保持禁用，MCP 保持空配置和严格模式，会话不持久化。原生技能文件以及用户／项目设置仍是实时输入，不会被计划哈希冻结。调用方必须记录来源并控制输出位置。仅项目模式允许在工作区的严格子目录中创建新的 `runDir`；仍禁止与工作区同路径、位于其祖先路径或与状态目录重叠。Agent 可以访问项目内的日志，因此它们是审计记录，不是防篡改证据。
+权限选择独立生效：`bypass` 仍映射为 `bypassPermissions`，不提供文件系统隔离。Hooks 保持禁用，MCP 保持严格模式且未显式提供时为空，会话不持久化。原生技能文件以及用户／项目设置仍是实时输入，不会被计划哈希冻结。调用方必须记录来源并控制输出位置。仅项目模式允许在工作区的严格子目录中创建新的 `runDir`；仍禁止与工作区同路径、位于其祖先路径或与状态目录重叠。Agent 可以访问项目内的日志，因此它们是审计记录，不是防篡改证据。
 
 生产宿主可以在最终交付目录外保留冻结的输入快照和暂存区，同时将项目根目录用作 cwd。本公共包不实现项目专有的暂存、审查或发布流程。
 

@@ -169,6 +169,31 @@ Events include `schemaVersion`, `runId`, `sequence`, `time`, `type` and `data`. 
 
 Timeout/abort terminates the POSIX process group, allows a short grace period, then force-kills remaining descendants. A child that intentionally escapes its process group cannot be contained by this mechanism. Parent-process exit handlers also kill active groups. No automatic retry, provider fallback, privilege escalation, native session resume or publication occurs.
 
+### Explicit MCP servers (0.2.3-mcp.1 preview)
+
+Codex, Claude Code and DeepSeek Harness accept an optional per-run HTTP MCP allowlist. Other adapters reject a nonempty list. Omit it or pass `[]` to retain the existing isolation; the runtime never imports global or workspace MCP registration files.
+
+```js
+const execution = plan({
+  ...request,
+  mcpServers: [{
+    name: 'comfy-hub',
+    url: 'http://hub.lan:8899/mcp/comfyui',
+    bearerTokenRef: 'PROJECT_HUB_TOKEN',
+    enabledTools: ['server_info', 'list_assets'],
+  }],
+});
+const result = await run(execution, { resolveCredential: ref => credentials[ref] });
+```
+
+`bearerTokenRef` uses the same caller-owned resolver as the model credential. `plan()` and `probe()` never resolve it or contact MCP servers. Plans contain `mcpCredentials: [{ref, envVar}]`; tokens are resolved only during `run()`, added to redaction, and provided as `JS_AGENT_RUNTIME_MCP_TOKEN_<index>` in the native CLI environment. No token value is placed in argv or generated configuration files. The caller must keep its credential source outside model-readable files. Explicit MCP endpoint hosts are added to both `NO_PROXY` and `no_proxy` for this child process, preserving existing exclusions and leaving global settings unchanged.
+
+`enabledTools` is an exact list of raw upstream tool names; omitted means all tools on that explicit server, and `[]` means none. Filesystem permissions do not infer MCP permissions: a read-only application must supply its own read-only tool list. URLs cannot contain user information, query parameters or fragments. Codex uses its native Streamable HTTP transport and `enabled_tools`. Claude and DSH launch the packaged stdio MCP policy bridge through their native MCP clients; the bridge filters discovery and independently denies forbidden or unknown calls before forwarding to the single configured HTTP URL. It supports tool discovery/calls, JSON/SSE responses, session cleanup and cancellation, but not resources, prompts or server-initiated client requests. Native tool names may normalize punctuation in the server name.
+
+Claude retains strict MCP configuration and existing file permissions, omitting `--safe-mode` only when explicit MCP is enabled. The reviewed CLI's subprocess scrub switch also suppresses explicit MCP, so MCP runs set it to `0` and use a POSIX Bash wrapper that removes model/MCP tokens and other credential-shaped variables before launching shell tools; Claude MCP requests fail closed on Windows until equivalent shell isolation is available. DSH's native subprocess environment scrub removes credential-shaped variables from shell tools, while its MCP entry explicitly passes only the selected token to the bridge. These controls prevent normal shell environment inheritance; explicit bypass is not an OS boundary against arbitrary same-user process inspection. MCP call timeouts are 400 seconds, bounded by the overall run deadline; the bridge's HTTP timeout is 390 seconds. Temporary bridge configuration is removed with run state. Runtime detects DSH's inactive diagnostics for its own MCP entries and terminates the run as failed; a CLI metadata probe alone is not proof that tools connected.
+
+This preview is distributed as a pinned local tarball and has not been published to npm.
+
 ### Windows
 
 `run()` and metadata `probe()` also work on native Windows. Windows has no process groups for console children, so containment is weaker than on POSIX:
@@ -195,7 +220,7 @@ const localTarget = {
 };
 ```
 
-For `claude-code`, `permission: 'bypass'` is an explicit opt-in supported by `api-key` and `claude-config`; subscription targets still reject it. It maps to `--permission-mode bypassPermissions`, disables the shell sandbox and provides no filesystem containment. The workspace does not constrain the CLI's reads or writes. Fixed tools, disabled hooks, no session persistence and an empty strict MCP configuration still apply. Config mode and API bypass omit `--safe-mode`/`--restricted`; API authentication retains `--bare`. On the reviewed Claude Code version, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` resets bypass to default, so explicit bypass uses `0` and gives up that subprocess environment scrubbing. Bypass is never selected automatically. DeepSeek and Cursor have their own explicit bypass mappings below.
+For `claude-code`, `permission: 'bypass'` is an explicit opt-in supported by `api-key` and `claude-config`; subscription targets still reject it. It maps to `--permission-mode bypassPermissions`, disables the shell sandbox and provides no filesystem containment. The workspace does not constrain the CLI's reads or writes. Fixed tools, disabled hooks, no session persistence and strict MCP configuration (empty unless explicitly supplied) still apply. Config mode and API bypass omit `--safe-mode`/`--restricted`; API authentication retains `--bare`. On the reviewed Claude Code version, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` resets bypass to default, so explicit bypass uses `0` and gives up that subprocess environment scrubbing. Bypass is never selected automatically. DeepSeek and Cursor have their own explicit bypass mappings below.
 
 For `claude-config`, `probe(plan, {checkLogin:true})` asks the CLI for authentication status and accepts its `loggedIn=true` verdict without requiring an OAuth/provider label. The result does not expose raw identity metadata or claim that the endpoint is Anthropic, that credentials work remotely, or that the selected model is compatible. Those require an actual execution. Claude adapter version 3 adds API effort/partial-message support, explicit API bypass and the subscription shell wrapper. Codex adapter version 3 adds credential-store selection and subscription proxy isolation. Regenerate previous execution plans before running them.
 
@@ -205,7 +230,7 @@ Custom endpoints must implement the adapter's real tool-capable protocol. A Chat
 
 Adapters use CLI-provided sandbox/permission controls; this package does not implement an OS container. Read-only profiles omit write/shell tools where applicable; workspace-write profiles retain native sandboxing and deny interactive escalation. Codex disables ancestor project root inference and sets the Git ceiling to the supplied workspace. Claude's non-bypass API/subscription profiles use restricted mode to confine file tools to working directories and fail closed if their configured shell sandbox is unavailable. The explicit Claude configuration/bypass exceptions are described above.
 
-Project/user customizations, automatic skill discovery and unrelated integrations are disabled by default. Explicit `claude-config` loads user settings while still disabling hooks and MCP integrations for the task. Production consumers must put their approved instruction and skill material into the explicit prompt/workspace. The package does not interpret a project-specific skill catalog or enable arbitrary MCP servers. Cursor has native context and remote-extension limitations described below.
+Project/user customizations, automatic skill discovery and unrelated integrations are disabled by default. Explicit `claude-config` loads user settings while still disabling hooks and importing only explicitly requested MCP servers for the task. Production consumers must put their approved instruction and skill material into the explicit prompt/workspace. The package does not interpret a project-specific skill catalog or enable arbitrary MCP servers. Cursor has native context and remote-extension limitations described below.
 
 CLI metadata was checked against Codex `0.163.0-alpha.10.2` and Claude Code `2.1.296`. Flags and native event formats are version-sensitive; use probes and a controlled smoke test after changing CLI versions. The test suite uses fake CLIs; a fake test pass is not evidence of a successful provider connection or finished content. A separate no-model Codex sandbox check verified a nested temporary workspace can write inside itself and cannot write its ancestor repository.
 
@@ -223,7 +248,7 @@ On 2026-10-19, one real host integration run using Codex adapter version 2, Code
 
 Set `harness.contextMode: 'project'` with `auth: 'claude-config'`, and pass the actual project root as `RunRequest.workspace`. The default (`snapshot` or omitted) retains the prior restricted skill-discovery behavior. Project mode enables the native `Skill` tool, removes `--disable-slash-commands`, and selects `--setting-sources user,project,local`. Claude discovers `.claude/skills` and its native instructions from the requested working directory; it reads other project files on demand. This does not put the whole repository into the prompt. Native built-in/user-plugin skills may also be available; this option is not a project-only skill allowlist.
 
-Permission selection remains independent: `bypass` still maps to `bypassPermissions` and provides no filesystem containment. Hooks remain disabled, MCP remains empty/strict, and sessions are not persisted. Native skill files and user/project settings remain live inputs, not frozen by the plan hash. Callers must capture provenance and control output placement. Only project mode allows a new `runDir` strictly below the workspace; equal/ancestor paths and state-directory overlap remain prohibited. Logs in the project are accessible to the agent, so they are audit records, not tamper-proof evidence.
+Permission selection remains independent: `bypass` still maps to `bypassPermissions` and provides no filesystem containment. Hooks remain disabled, MCP remains strict and empty unless explicitly supplied, and sessions are not persisted. Native skill files and user/project settings remain live inputs, not frozen by the plan hash. Callers must capture provenance and control output placement. Only project mode allows a new `runDir` strictly below the workspace; equal/ancestor paths and state-directory overlap remain prohibited. Logs in the project are accessible to the agent, so they are audit records, not tamper-proof evidence.
 
 The production host can keep frozen input snapshots and staging outside the final delivery directory while using the project root as cwd. No project-specific staging, review or publishing behavior is implemented in this public package.
 

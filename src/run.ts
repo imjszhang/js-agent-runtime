@@ -1,6 +1,7 @@
 import { appendFileSync, writeFileSync, constants } from "node:fs";
 import { access, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { withMcpNoProxy } from "./mcp.js";
 import { assertPlan, getAdapter, RUNTIME_VERSION } from "./plan.js";
 import { baseEnvironment, runProcess } from "./process.js";
 import { createRedactor } from "./redaction.js";
@@ -35,6 +36,7 @@ export async function run(input: ExecutionPlan, options: RunOptions = {}): Promi
   const env = operationalEnvironment(options.env), adapter = getAdapter(execution.adapter.id);
   for (const value of Object.values({ ...baseEnvironment(), ...env })) if (/:\/\/[^\s/]+:[^\s/]+@/u.test(value)) redactor.add(value);
   let ownedState = false, logDir: string | undefined, sequence = 0, callbackError = false, parseError: string | null = null, metadataTimedOut = false;
+  let mcpStartupError: string | null = null;
   let callbackQueue = Promise.resolve();
   const controller = new AbortController();
   const onAbort = (): void => controller.abort(); options.signal?.addEventListener("abort", onAbort, { once: true });
@@ -73,7 +75,7 @@ export async function run(input: ExecutionPlan, options: RunOptions = {}): Promi
         await newDirectory(requested); logDir = requested;
       }
       await newDirectory(execution.stateDir); ownedState = true;
-      const processEnv = { ...baseEnvironment(), ...env, ...execution.process.env };
+      const processEnv = withMcpNoProxy(request, { ...baseEnvironment(), ...env, ...execution.process.env });
       await prepareStateDirectories(processEnv, execution.stateDir);
       if (adapter.id === "cursor-agent") await assertCursorWorkspace(request.workspace);
       if (builtInIds.has(adapter.id)) {
@@ -105,21 +107,21 @@ export async function run(input: ExecutionPlan, options: RunOptions = {}): Promi
           if (!verdict.passed) throw new Error(verdict.message);
         }
       }
-      if (execution.credential) {
+      for (const credential of [...(execution.credential ? [execution.credential] : []), ...(execution.mcpCredentials ?? [])]) {
         let key: string | undefined;
         try {
           let timer: NodeJS.Timeout | undefined;
           let abortCredential: (() => void) | undefined;
           try {
             key = await Promise.race([
-              Promise.resolve((options.resolveCredential ?? (name => process.env[name]))(execution.credential.ref)),
+              Promise.resolve((options.resolveCredential ?? (name => process.env[name]))(credential.ref)),
               new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("credential deadline")), Math.max(1, request.timeoutMs - (Date.now() - started))); }),
               new Promise<never>((_, reject) => { abortCredential = () => reject(new Error("cancelled")); controller.signal.addEventListener("abort", abortCredential, { once: true }); if (controller.signal.aborted) abortCredential(); }),
             ]);
           } finally { if (timer) clearTimeout(timer); if (abortCredential) controller.signal.removeEventListener("abort", abortCredential); }
         } catch { throw new Error("Credential resolution failed or exceeded the task deadline"); }
-        if (typeof key !== "string" || !key || key.includes("\0")) throw new Error(`Missing credential: ${execution.credential.ref}`);
-        redactor.add(key); processEnv[execution.credential.envVar] = key;
+        if (typeof key !== "string" || !key || key.includes("\0")) throw new Error(`Missing credential: ${credential.ref}`);
+        redactor.add(key); processEnv[credential.envVar] = key;
       }
       if (logDir) {
         writeFileSync(path.join(logDir, "plan.json"), JSON.stringify(redactor.value(execution), null, 2) + "\n", { mode: 0o600, flag: "wx" });
@@ -137,7 +139,17 @@ export async function run(input: ExecutionPlan, options: RunOptions = {}): Promi
           onLine: (stream, line) => {
             if (logDir) appendFileSync(path.join(logDir, `${stream}.log`), redactor.text(line) + "\n", { mode: 0o600 });
             if (!line.trim()) return;
-            if (stream === "stderr") { emit("diagnostic", { stream, text: line }); return; }
+            if (stream === "stderr") {
+              emit("diagnostic", { stream, text: line });
+              // DSH treats custom plugin activation failures as optional. An
+              // explicitly requested runtime MCP entry must fail this run.
+              const inactiveMcp = adapter.id === "deepseek-harness" ? /^\s*runtime-mcp-(\d+) \(@deepseek-ai\/dsh-mcp-client\):/u.exec(line) : null;
+              if (inactiveMcp && Number(inactiveMcp[1]) < (request.mcpServers?.length ?? 0)) {
+                mcpStartupError = "An explicitly configured MCP server failed to activate";
+                throw new Error(mcpStartupError);
+              }
+              return;
+            }
             try { for (const event of parser.push(JSON.parse(line))) emit(event.type, event.data); }
             catch { parseError ??= "Agent emitted malformed or unsupported JSON events"; emit("raw", { text: line }); }
           },
@@ -164,6 +176,7 @@ export async function run(input: ExecutionPlan, options: RunOptions = {}): Promi
         const nativeSubscription = backend.auth === "chatgpt" || backend.auth === "claude-subscription";
         Object.assign(result, { text: parsed.text, usage: parseError ? null : parsed.usage, cost: nativeSubscription || parseError ? null : parsed.cost, sessionId: parsed.sessionId, responseModel: parsed.responseModel, exitCode: processResult.exitCode, signal: processResult.signal });
         if (options.signal?.aborted || (processResult.cancelled && !callbackError)) { result.status = "cancelled"; result.error = "Run cancelled"; }
+        else if (mcpStartupError) { result.status = "failed"; result.error = mcpStartupError; result.usage = null; result.cost = null; }
         else if (inspectionCancelled && !callbackError) { result.status = "cancelled"; result.error = "Run cancelled during OpenCode session inspection"; }
         else if (processResult.timedOut || inspectionTimedOut) { result.status = "timed_out"; result.error = processResult.error ?? parsed.error; }
         else if (processResult.error || processResult.exitCode !== 0 || parseError || parsed.failed || !parsed.completed) result.error = processResult.error ?? parseError ?? parsed.error ?? (processResult.exitCode !== 0 ? `Agent process exited with ${processResult.signal ?? processResult.exitCode}` : "Agent ended without a terminal completion event");

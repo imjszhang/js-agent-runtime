@@ -7,6 +7,13 @@ during 0.x development, breaking changes increment the minor version.
 
 - Refresh the English README with an agent overview, quick start and platform validation summary; add a complete Simplified Chinese README with language links and include it in future npm packages.
 
+## [0.2.3-mcp.1] - 2026-11-14 (unpublished preview)
+
+- Add explicit per-run HTTP MCP servers for Codex, Claude Code and DeepSeek Harness, credential references resolved only at execution, and exact tool allowlists. Empty configuration keeps prior isolation; unrelated global and project MCP registrations remain excluded.
+- Use native Codex HTTP tools and a packaged native-stdio-to-HTTP policy bridge for Claude/DSH. Filter both discovery and invocation, redact upstream credential echoes, support JSON/SSE, cancellation and session cleanup, and keep bearer values out of plans, argv and configuration files.
+- Remove MCP tokens from Claude POSIX Bash environments and use DSH's native credential scrub with explicit bridge-only environment injection. Add explicit MCP hosts to child-only proxy exclusions. Treat DSH's inactive runtime MCP entry diagnostics as execution failure.
+- Add portable validation, credential lifecycle, shell isolation and protocol regression tests. This preview is distributed only as a pinned local npm tarball; no registry publication is included.
+
 ## [0.2.2] - 2026-10-25
 
 - Run Cursor Agent on native Windows. Point `harness.executable` at the version directory's `node.exe` (the `agent.cmd` shim is still rejected). The adapter starts the sibling `index.js` without a shell. `cursor-login` reads the Windows user credential file only when `useCurrentUserHomeForLogin` is set and never copies it. Workspace-write puts a PowerShell PATH shim ahead of the host shell to strip credential-like variables. Reviewed builds are `2026.07.23-e383d2b` and `2026.10.22-27dcf5f`. Cursor adapter version is now 2; recreate older plans. The stall-timeout preload remains bound to the first build and fails closed on any other bundle.
