@@ -136,6 +136,8 @@ npm run typecheck
 npm pack
 ```
 
+Portable test files run serially to keep process-startup contention from consuming their short deadline budgets; all timeout values and assertions remain unchanged. This test-runner setting does not change production execution concurrency.
+
 On Windows, tests whose fake CLIs are shebang scripts are skipped with that reason (Windows cannot start them without a shell). Cursor execution tests hard-link the current Node binary and start the sibling `index.js`, the same entry the Windows adapter uses. `tests/process.test.mjs` covers timeout, cancellation, output limits, descendant cleanup and an end-to-end extension run on every platform by using the current Node executable directly.
 
 An optional `npm run test:sandbox` invokes the installed Codex sandbox in temporary fake repositories (API and native-login plans, read-only and workspace-write). It never requests a model or reads credentials. It is intentionally separate from the portable fake test suite.

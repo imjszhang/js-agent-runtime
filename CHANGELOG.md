@@ -9,6 +9,7 @@ during 0.x development, breaking changes increment the minor version.
 - Bump only the DeepSeek adapter to version 2 so previously frozen plans must be recreated deliberately. Other adapters and public request options are unchanged.
 - Add portable mode-matrix regression coverage and native loopback assertions against exposed goal, team and schedule tools. Verify project workspace-write, read-only, snapshot workspace-write and project bypass with the real rc.5 CLI on macOS/Node 24. This does not validate a real provider account or native DSH on other operating systems.
 - Maintenance release based on `v0.2.2`; unreleased main-branch MCP connection features are not included.
+- Run portable test files serially so concurrent fixture startup does not consume their short deadline budgets. Keep all cases, assertions and timeout values unchanged; production execution behavior is unaffected.
 
 ## [0.2.2] - 2026-10-25
 

@@ -15,6 +15,12 @@ optional and documented in the README. Add regression coverage for behavioral ch
 keep credential resolution, redaction, and permission boundaries explicit. Update the
 README for API changes and the Unreleased section of CHANGELOG.md for user-facing changes.
 
+The portable test runner executes one test file at a time. Many fixtures start real
+child processes with intentionally short deadlines; running all files concurrently
+can exhaust startup resources before the scenario reaches the behavior under test.
+Keep every deadline and assertion intact. Serial file scheduling changes test-host
+resource contention, not the runtime's timeout, cancellation or concurrency behavior.
+
 Submit focused pull requests against `main`. Do not include credentials, local logs,
 generated `dist` files, or `node_modules`.
 

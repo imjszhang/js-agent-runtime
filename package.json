@@ -26,7 +26,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test tests/*.test.mjs",
+    "test": "npm run build && node --test --test-concurrency=1 tests/*.test.mjs",
     "test:live": "npm run build && node scripts/live-smoke.mjs",
     "test:sandbox": "npm run build && node tests/native-sandbox.mjs",
     "test:deepseek-native": "npm run build && node tests/native-deepseek.mjs",
