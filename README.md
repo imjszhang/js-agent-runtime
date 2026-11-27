@@ -214,3 +214,7 @@ On 2026-10-24, one live attempt also passed on native Windows (10.0.26100 x64, N
 ## License
 
 [MIT](LICENSE) © 2026 imjszhang.
+
+## npm release automation
+
+Releases use GitHub trusted publishing with short-lived OIDC credentials. See [RELEASING.md](RELEASING.md) for preparation, publication and verification.

@@ -1,3 +1,8 @@
+# 0.2.4
+
+- Add GitHub OIDC trusted publishing, release artifact validation and regression tests.
+- No runtime behavior changes from 0.2.3; unreleased main MCP features are excluded.
+
 # Changelog
 
 Changes are recorded by package version. Version numbers follow Semantic Versioning;
