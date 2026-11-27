@@ -27,7 +27,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test tests/*.test.mjs",
+    "test": "npm run build && node --test --test-concurrency=1 tests/*.test.mjs",
     "test:live": "npm run build && node scripts/live-smoke.mjs",
     "test:sandbox": "npm run build && node tests/native-sandbox.mjs",
     "test:deepseek-native": "npm run build && node tests/native-deepseek.mjs",
@@ -38,7 +38,10 @@
     "version": "node scripts/version.mjs && git add src/plan.ts",
     "check": "npm run check:version && npm run check:cursor-shell && npm run typecheck && npm test",
     "prepublishOnly": "npm run check",
-    "test:package": "node scripts/package-smoke.mjs"
+    "test:package": "node scripts/package-smoke.mjs",
+    "check:release": "node scripts/check-release.mjs",
+    "release:pack": "node scripts/prepare-release.mjs",
+    "release:prepare": "npm run check:release && npm run check && npm run test:package && npm run release:pack"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",

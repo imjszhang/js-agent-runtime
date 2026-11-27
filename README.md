@@ -328,3 +328,7 @@ Portable tests cover strict validation, auth isolation, all five built-in routes
 ## License
 
 [MIT](LICENSE) © 2026 imjszhang.
+
+## npm release automation
+
+Releases use GitHub trusted publishing (OIDC), without stored publishing tokens or routine browser authorization. The manual workflow defaults to preparation only; explicit publication requires the exact source version. See [RELEASING.md](RELEASING.md) for source branches, one-time setup, verification and failure recovery.
