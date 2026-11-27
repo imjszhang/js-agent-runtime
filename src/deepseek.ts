@@ -26,12 +26,15 @@ function deepseekPlan(request: RunRequest, state: string): AdapterPlan {
   ];
   // Retain native file/shell/skill tools, but no alternate model routes, personal
   // profiles, plugin installation, telemetry or delegated usage outside this run.
+  // Goal continuation and shared team control belong to the caller, not this
+  // one-attempt harness. The base/headless bundles mount no schedule or UI tools.
   for (const id of [
     "hmr", "plugin-manager", "tool-plugin-manager", "config-editor", "settings",
     "credentials", "authorization", "deepseek-account", "llm-deepseek-account", "llm-pi-ai",
     "session-title-llm", "otel", "session-telemetry-otel",
     "web", "web-search-deepseek", "web-fetch-http", "tool-web", "mcp-resources",
     "tool-subagent", "tool-subagent-fork", "tool-subagent-control", "tool-subagent-list-agents", "tool-workflow", "workflow-ptc", "ptc-runtime",
+    "goal", "goal-round-driver", "command-goal", "tool-goal", "agent-team", "tool-agent-team",
   ]) patches.push({ id, disabled: true });
   if (request.target.harness.permission === "read-only") patches.push({ id: "tool-bash", disabled: true }, { id: "tool-pwsh", disabled: true });
   return {
@@ -54,7 +57,7 @@ function deepseekPlan(request: RunRequest, state: string): AdapterPlan {
 }
 
 export const deepseekAdapter: Adapter = {
-  id: "deepseek-harness", version: "1", validate: target => { validateBackend(target); },
+  id: "deepseek-harness", version: "2", validate: target => { validateBackend(target); },
   plan: (request, context) => deepseekPlan(request, context.stateDir),
   createParser: createDeepseekParser, probeArgs: ["--version"],
 };

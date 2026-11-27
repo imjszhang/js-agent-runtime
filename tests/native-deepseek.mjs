@@ -85,6 +85,11 @@ async function nativeSmoke(cli) {
         assert.ok(!serialized.includes(poisonDescription), 'unselected native skill directory leaked');
         if (current === 0) {
           const tools = new Set((body.tools ?? []).map(tool => tool.name));
+          for (const name of ['create_goal', 'get_goal', 'update_goal',
+            'team_task_create', 'team_task_list', 'team_task_get', 'team_task_update',
+            'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit']) {
+            assert.equal(tools.has(name), false, `one-attempt harness exposed independent task control: ${name}`);
+          }
           assert.equal(serialized.includes(marker), active.contextMode === 'project', 'project/snapshot rule loading mismatch');
           assert.equal(serialized.includes(description), true, 'workspace skill catalog missing');
           assert.equal(tools.has('skill'), true, 'workspace skill tool missing');

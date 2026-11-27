@@ -51,6 +51,24 @@ test('DSH permissions remain explicit; project skills are scoped to the requeste
   }
   assert.equal(patch(plan(request())).find(e => e.id === 'agent-instructions').disabled, true);
 });
+test('DSH one-attempt profile excludes native goal continuation and team coordination in every mode', () => {
+  for (const permission of ['read-only', 'workspace-write', 'bypass']) {
+    for (const contextMode of ['project', 'snapshot']) {
+      const p = plan(request({ permission, contextMode })), patches = patch(p);
+      assert.equal(p.adapter.version, '2', 'old DSH plans must be recreated');
+      for (const id of ['goal', 'goal-round-driver', 'command-goal', 'tool-goal', 'agent-team', 'tool-agent-team']) {
+        assert.equal(patches.find(entry => entry.id === id)?.disabled, true, `${permission}/${contextMode}: ${id}`);
+      }
+      // Preserve native file/skill tools and the in-attempt todo list. Disabling
+      // independent goals must not turn the harness into a tool-free executor.
+      for (const id of ['tool-fs', 'tool-fs-search', 'tool-skill', 'tool-todo']) {
+        assert.notEqual(patches.find(entry => entry.id === id)?.disabled, true, id);
+      }
+      assert.deepEqual(JSON.parse(p.files.find(file => file.path.endsWith('package.json')).content).dsh.profile.bundles,
+        ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless']);
+    }
+  }
+});
 test('DSH rejects native auth, wrong protocols, configured sentinel, and unsupported reasoning controls', () => {
   const make = backend => { const r = request(); r.target.backend = backend; return r; };
   for (const auth of ['chatgpt', 'claude-config', 'claude-subscription']) assert.throws(() => plan(make({ auth, model: 'model' })), /api-key/);

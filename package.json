@@ -1,6 +1,6 @@
 {
   "name": "js-agent-runtime",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Small, provider-aware runtime for local agent CLIs.",
   "type": "module",
   "engines": {
